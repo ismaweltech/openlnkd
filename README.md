@@ -65,6 +65,29 @@ Session cookies are stored in the local database after each login. On restart, O
 
 ## Quick start
 
+### Option A — Docker (recommended)
+
+No Node, no Chromium setup, no OS dependencies — everything ships inside the image.
+
+```bash
+git clone https://github.com/ismaweltech/openlnkd.git
+cd openlnkd
+cp .env.example .env     # put your LinkedIn credentials here
+docker compose up -d
+```
+
+That's it: API on `http://localhost:3000`, Swagger on `/docs`. The SQLite database (including your session cookies) persists in a named volume across restarts.
+
+To update after a new release:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+> Chromium inside a container needs shared memory — the compose file already sets `shm_size: 1gb`, so don't remove it.
+
+### Option B — Manual install
+
 ### 1. Clone and install
 
 ```bash
@@ -526,7 +549,7 @@ SQLite by default at `./data/openlnkd.db`. Switch to PostgreSQL by setting `DATA
 - [x] Location typeahead with geoId mapping and DB cache
 - [x] Webhooks — receive new messages as HTTP events
 - [ ] Easy Apply automation
-- [ ] Docker Compose setup
+- [x] Docker Compose setup (Playwright base image, persistent volume)
 - [ ] Proxy rotation for safer scraping at scale
 - [ ] PostgreSQL — full validation and migration scripts
 

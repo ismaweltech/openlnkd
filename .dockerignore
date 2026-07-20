@@ -1,0 +1,15 @@
+node_modules
+dist
+data
+.env
+*.db
+.git
+.gitignore
+client
+public
+test
+README.md
+LICENSE
+Dockerfile
+docker-compose.yml
+.dockerignore

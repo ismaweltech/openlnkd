@@ -1,0 +1,24 @@
+services:
+  openlnkd:
+    build: .
+    # To use a prebuilt image instead of building locally, comment `build`
+    # and uncomment the line below once images are published:
+    # image: ghcr.io/ismaweltech/openlnkd:latest
+    container_name: openlnkd
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Container-safe overrides (win over .env values)
+      - HEADLESS=true
+      - DATABASE_PATH=/app/data/openlnkd.db
+    volumes:
+      # Persists the SQLite DB (session cookies included) across restarts
+      - openlnkd-data:/app/data
+    restart: unless-stopped
+    # Chromium needs shared memory; the 64MB Docker default causes crashes
+    shm_size: 1gb
+
+volumes:
+  openlnkd-data:
