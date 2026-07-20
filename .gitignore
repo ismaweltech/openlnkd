@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+.env
+*.db
+
+# Internal test dashboard — not part of the public release
+client/
+public/
