@@ -552,6 +552,14 @@ export class CompaniesService {
       (el: Element) => (el as HTMLElement).innerText ?? '',
     );
 
+    // Mutual-connection mentions ("Ana, Luis y 3 contactos más en común") render as
+    // bare /in/ links whose text is ONLY the person's name. A real result card always
+    // carries several lines (name, headline, location, buttons…), so a single-line
+    // link is NOT a search result — skip it or it gets saved with the searched
+    // company stamped on it despite not working there.
+    const rawLines = innerText.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (rawLines.length < 2) return null;
+
     // Skip UI noise: action buttons, degree indicators, and LinkedIn profile badges.
     // "Localizable" = open-to-connect badge; "Con conexión" = 1st-degree badge —
     // both appear as the first text node in some cards and must not be mistaken for the name.

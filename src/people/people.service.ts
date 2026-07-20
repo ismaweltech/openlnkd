@@ -287,6 +287,12 @@ export class PeopleService {
 
     const innerText: string = await card.evaluate((el: Element) => (el as HTMLElement).innerText ?? '');
 
+    // Mutual-connection mentions ("Ana, Luis y 3 contactos más en común") render as
+    // bare /in/ links whose text is ONLY the person's name — a real result card always
+    // carries several lines. A single-line link is not a search result: skip it.
+    const rawLines = innerText.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (rawLines.length < 2) return null;
+
     // Extract degree from raw text before filtering (handles both inline and separate-line formats).
     let connectionDegree: string | null = null;
     const degreeMatch = innerText.match(/•\s*(\d+[ºa-z°]*|3er\+)/i);
