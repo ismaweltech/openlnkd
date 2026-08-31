@@ -11,6 +11,7 @@ import { OutreachModule } from './outreach/outreach.module';
 import { PeopleModule } from './people/people.module';
 import { SessionModule } from './session/session.module';
 import { TemplatesModule } from './templates/templates.module';
+import { UpdateModule } from './common/update/update.module';
 import { WebhookModule } from './webhook/webhook.module';
 
 @Module({
@@ -28,6 +29,7 @@ import { WebhookModule } from './webhook/webhook.module';
     PeopleModule,
     OutreachModule,
     WebhookModule,
+    UpdateModule,
   ],
 })
 export class AppModule {}
