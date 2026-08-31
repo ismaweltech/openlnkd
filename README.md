@@ -511,6 +511,35 @@ POST /webhooks  { "url": "https://your-app.com/hook", "interval_sec": 60 }
 
 ---
 
+## Staying up to date
+
+LinkedIn changes its site constantly, so selectors and API paths break often and fixes land frequently. Keeping your copy current matters more here than in a typical project.
+
+On startup, OpenLnkd checks GitHub for the latest release and logs a notice if yours is behind:
+
+```
+⚠️  Update available: v0.2.1 (you're on v0.1.0)
+   update with: git pull && docker compose up -d --build
+```
+
+You can also query it any time:
+
+```bash
+GET /version
+# → { "current": "0.1.0", "latest": "0.2.1", "upToDate": false, "releaseUrl": "..." }
+```
+
+**Privacy:** the check only performs a public, unauthenticated `GET` to GitHub's releases API. It sends **no** information about you, your machine, or your usage — it is your instance asking GitHub "what's the newest version", nothing more. Disable it entirely with `UPDATE_CHECK=false`.
+
+**To update:**
+
+```bash
+git pull && docker compose up -d --build   # Docker
+git pull && npm install && npm run build    # manual
+```
+
+---
+
 ## Database
 
 SQLite by default at `./data/openlnkd.db`. Switch to PostgreSQL by setting `DATABASE_URL`.
