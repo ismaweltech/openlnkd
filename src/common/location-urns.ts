@@ -42,8 +42,11 @@ export const LOCATION_URNS: Record<string, string> = {
   // ── Major cities ──────────────────────────────────────────────────────────
   madrid: '103435383',
   barcelona: '101290685',
-  sevilla: '106571572',
-  seville: '106571572',
+  // Verified 2026-08 via the jobs UI location chip (the old 106571572 resolved
+  // to Ballygasty, Ireland). 102187989 = city, 90009810 = metro area.
+  sevilla: '102187989',
+  seville: '102187989',
+  'sevilla y alrededores': '90009810',
   valencia: '101246109',
   bilbao: '106749819',
   málaga: '103740976',

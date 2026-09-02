@@ -158,9 +158,19 @@ export class JobsService {
 
       let attempts = 0;
       while (jobs.length < limit && attempts < 10) {
-        const cards = await page.$$(
-          'div[data-job-id].job-card-container, li[data-occludable-job-id], [data-job-id]',
-        );
+        let cards: any[];
+        try {
+          cards = await page.$$(
+            'div[data-job-id].job-card-container, li[data-occludable-job-id], [data-job-id], ' +
+            '[componentkey^="job-card-component-ref-"]',
+          );
+        } catch (e) {
+          // SPA navigations destroy the execution context mid-scrape — wait and retry
+          this.logger.debug(`Card query failed (${(e as Error).message.split('\n')[0]}), retrying`);
+          attempts++;
+          await this.delay(2000, 3000);
+          continue;
+        }
         this.logger.debug(`Found ${cards.length} cards on page`);
 
         for (const card of cards) {
@@ -527,7 +537,13 @@ export class JobsService {
   private async extractJobCard(card: any, _page: any): Promise<Job | null> {
     // ElementHandle: usar card.$() en vez de card.locator()
     const id = await card.getAttribute('data-job-id').catch(() => null);
-    if (!id) return null;
+    if (!id) {
+      // New SDUI search UI (2026): cards carry componentkey="job-card-component-ref-<id>"
+      const key = await card.getAttribute('componentkey').catch(() => null);
+      const m = key?.match(/^job-card-component-ref-(\d+)$/);
+      if (m) return this.extractSduiJobCard(card, m[1]);
+      return null;
+    }
 
     const getText = async (selectors: string[]): Promise<string> => {
       for (const sel of selectors) {
@@ -601,6 +617,76 @@ export class JobsService {
     };
   }
 
+  // SDUI cards ship hashed class names, so fields are derived from the text lines:
+  // title / title (dup) / company / location / [extras…] / posted
+  private async extractSduiJobCard(card: any, id: string): Promise<Job | null> {
+    const raw: string = (await card.innerText().catch(() => '')) || '';
+    // Badges pollute the first line ("Seleccionado, <title>", "<title> (Empleo verificado)"),
+    // so compare badge-stripped lines to collapse the duplicated title
+    const clean = (s: string) =>
+      s
+        .replace(/^Seleccionado,\s*/i, '')
+        .replace(/\s*\((Empleo verificado|Verified job)\)\s*$/i, '')
+        .trim();
+    const lines = raw
+      .split('\n')
+      .map((l: string) => l.trim())
+      .filter(Boolean)
+      .filter((l: string, i: number, a: string[]) => l !== a[i - 1]);
+    if (!lines.length) return null;
+    if (lines.length >= 2 && clean(lines[0]).includes(clean(lines[1]))) lines.shift();
+
+    const title = clean(lines[0]);
+    const company = lines[1] ?? '';
+    const location = lines[2] ?? null;
+    const postedLine =
+      lines.find((l: string) => /^(publicado|posted)/i.test(l)) ??
+      lines.find((l: string) => /\bhace\b|\bago\b/i.test(l)) ??
+      null;
+    const easyApply = lines.some((l: string) => /solicitud sencilla|easy apply/i.test(l));
+    // "Barcelona (Híbrido)" → modality from the parenthesis
+    const remote = location?.match(/\(([^)]+)\)/)?.[1] ?? null;
+
+    return {
+      id,
+      title,
+      company,
+      location,
+      remote,
+      url: `https://www.linkedin.com/jobs/view/${id}/`,
+      posted_at: this.parseRelativeDate(postedLine),
+      description: null,
+      easy_apply: easyApply,
+      applied: false,
+      saved: false,
+      scraped_at: new Date().toISOString(),
+    };
+  }
+
+  // "Publicado hace 3 días" / "Posted 2 weeks ago" → approximate ISO date
+  private parseRelativeDate(line: string | null): string | null {
+    if (!line) return null;
+    const m = line.match(
+      /(\d+)\s*(minuto|hora|d[ií]a|semana|mes|añ|an[oó]|minute|hour|day|week|month|year)/i,
+    );
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    const unit = m[2].toLowerCase();
+    const HOUR = 3600e3;
+    const msPer = unit.startsWith('minut')
+      ? 60e3
+      : unit.startsWith('hora') || unit.startsWith('hour')
+        ? HOUR
+        : unit.startsWith('d')
+          ? 24 * HOUR
+          : unit.startsWith('semana') || unit.startsWith('week')
+            ? 7 * 24 * HOUR
+            : unit.startsWith('mes') || unit.startsWith('month')
+              ? 30 * 24 * HOUR
+              : 365 * 24 * HOUR;
+    return new Date(Date.now() - n * msPer).toISOString();
+  }
+
   private async scrollAndLoadMore(page: any): Promise<boolean> {
     // LinkedIn jobs sidebar is a scrollable div, not the body
     await page.evaluate(() => {
@@ -612,9 +698,18 @@ export class JobsService {
       );
       if (list) {
         list.scrollBy(0, 800);
-      } else {
-        window.scrollBy(0, 800);
+        return;
       }
+      // SDUI UI: results live in a lazy-column — scroll its nearest scrollable ancestor
+      let el: Element | null = document.querySelector('[data-testid="lazy-column"]');
+      while (el) {
+        if (el.scrollHeight > el.clientHeight + 50) {
+          el.scrollBy(0, 800);
+          return;
+        }
+        el = el.parentElement;
+      }
+      window.scrollBy(0, 800);
     });
     await this.delay(2000, 3000);
     return true; // keep looping until attempts limit or job limit
