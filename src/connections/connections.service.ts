@@ -26,90 +26,120 @@ export class ConnectionsService {
     try {
       this.logger.log(`Sending invite to ${profileUrl}`);
       await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      await this.delay(2000, 3000);
+      await this.delay(2500, 3500);
 
-      // Debug: log ALL top-card buttons so we can see what's actually on the page
-      const topCardButtons = await page.evaluate(() => {
-        const mainSection = document.querySelector('main section:first-of-type, .pv-top-card, .ph5');
-        const scope = mainSection ?? document.body;
-        return Array.from(scope.querySelectorAll('button')).map(b => ({
-          text: b.textContent?.trim().substring(0, 40) ?? '',
-          aria: b.getAttribute('aria-label')?.substring(0, 60) ?? '',
-        }));
-      }).catch(() => [] as any[]);
-      this.logger.debug(`Top-card buttons: ${JSON.stringify(topCardButtons)}`);
+      const name = await page.$eval('h1', (el) => el.textContent?.trim() ?? '').catch(() => '');
+      const headline = await page
+        .$eval('.text-body-medium.break-words, [class*="pv-text-details"] .text-body-medium',
+          (el) => el.textContent?.trim() ?? '')
+        .catch(() => null);
 
-      // Extraer nombre y headline del perfil
-      const name = await page.$eval(
-        'h1',
-        (el) => el.textContent?.trim() ?? '',
-      ).catch(() => '');
+      // ── Step 1: open the "Connect" action ─────────────────────────────────
+      // All clicks happen IN-PAGE (el.click()) to avoid Playwright's 30s
+      // visibility waits. We scope to the profile action bar (right after the
+      // <h1> name) so feed/post buttons can't produce false positives, and match
+      // button text/aria EXACTLY — a substring match on "connect" wrongly hit
+      // unrelated controls before. LinkedIn now shows many profiles as
+      // "Follow"-only, where Connect is genuinely absent; that returns ok:false.
+      const step1 = await page.evaluate(() => {
+        const isConnect = (b: HTMLButtonElement) => {
+          const t = (b.textContent ?? '').trim().toLowerCase();
+          const a = (b.getAttribute('aria-label') ?? '').trim().toLowerCase();
+          return t === 'conectar' || t === 'connect' || a === 'conectar' || a === 'connect' ||
+            /^invitar? a .* a que (forme parte|conecte)/i.test(a) || /^invite .* to connect/i.test(a);
+        };
+        // Anchor on the profile ACTION BAR, not the whole page: it's the parent of
+        // the primary action button ("Seguir"/"Mensaje"/"Conectar"/"Pendiente").
+        // The feed below has its own "Más" buttons on every post — scoping here
+        // stops those from producing a false positive.
+        const primary = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) => {
+          const t = (b.textContent ?? '').trim().toLowerCase();
+          const a = (b.getAttribute('aria-label') ?? '').trim().toLowerCase();
+          return ['seguir', 'follow', 'mensaje', 'message', 'pendiente', 'pending'].includes(t) ||
+            /^(mensaje|message|seguir a|follow) /i.test(a) || isConnect(b);
+        });
+        const bar = primary?.parentElement;
+        if (!bar) return 'no-topcard';
+        const barBtns = Array.from(bar.querySelectorAll<HTMLButtonElement>('button'));
 
-      const headline = await page.$eval(
-        '.text-body-medium.break-words, [class*="pv-text-details"] .text-body-medium',
-        (el) => el.textContent?.trim() ?? '',
-      ).catch(() => null);
+        const direct = barBtns.find(isConnect);
+        if (direct) { direct.click(); return 'direct'; }
 
-      // Buscar botón "Connect" / "Conectar"
-      const connectBtn = await this.findConnectButton(page);
-      if (!connectBtn) {
-        return { ok: false, message: 'Connect button not found — already connected or not available' };
+        // Otherwise open the action bar's "Más / More actions" overflow (exact aria).
+        const more = barBtns.find((b) => {
+          const a = (b.getAttribute('aria-label') ?? '').trim().toLowerCase();
+          return a === 'más' || a === 'more actions' || a === 'more';
+        });
+        if (!more) return 'no-connect';
+        more.click();
+        return 'opened-more';
+      });
+
+      if (step1 === 'no-topcard' || step1 === 'no-connect') {
+        return { ok: false, message: 'No "Connect" option on this profile (Follow-only or restricted)' };
       }
 
-      await connectBtn.click();
-      await this.delay(1500, 2000);
-
-      // Helper: find a visible button by matching its text content
-      const findBtnByText = async (needles: string[]): Promise<any | null> => {
-        const btns = await page.$$('button');
-        for (const btn of btns) {
-          const txt = ((await btn.textContent().catch(() => '')) ?? '').trim().toLowerCase();
-          if (needles.some((n) => txt.includes(n.toLowerCase()))) return btn;
+      // If the overflow menu opened, click "Conectar" inside it.
+      if (step1 === 'opened-more') {
+        await this.delay(700, 1100);
+        const inMenu = await page.evaluate(() => {
+          const items = Array.from(
+            document.querySelectorAll<HTMLElement>('[role="menuitem"], .artdeco-dropdown__content a, .artdeco-dropdown__content button'),
+          );
+          const connect = items.find((i) => /^(conectar|connect)$/i.test((i.innerText ?? '').replace(/\s+/g, ' ').trim()));
+          if (connect) { connect.click(); return true; }
+          return false;
+        });
+        if (!inMenu) {
+          return { ok: false, message: 'No "Connect" option on this profile (Follow-only or restricted)' };
         }
-        return null;
-      };
+      }
+
+      // ── Step 2: handle the invite modal (optional note) and send ──────────
+      await this.delay(1200, 1800);
 
       if (message) {
-        // With note: click "Añadir una nota" then fill in the textarea
-        const addNoteBtn = await findBtnByText(['add a note', 'añadir una nota', 'add note', 'añadir nota']);
-        if (addNoteBtn) {
-          await addNoteBtn.click();
-          await this.delay(500, 800);
-          const textarea = await page.$('textarea[name="message"], textarea[id*="custom-message"]');
-          if (textarea) {
-            await textarea.type(message.substring(0, 300), { delay: 30 });
-            await this.delay(400, 600);
-          }
-        }
-        // Now hit the final Send button
-        const sendBtn = await findBtnByText(['send', 'enviar']);
-        if (!sendBtn) {
-          return { ok: false, message: 'Send button not found after writing note' };
-        }
-        await sendBtn.click();
-      } else {
-        // No note: look for "Enviar sin nota" / "Send without a note"
-        const sendNoNote = await findBtnByText([
-          'send without a note', 'enviar sin nota', 'send without note',
-        ]);
-        if (sendNoNote) {
-          await sendNoNote.click();
-        } else {
-          // Fallback — modal may not have appeared (e.g. already handled), try generic Send
-          const sendBtn = await findBtnByText(['send', 'enviar']);
-          if (!sendBtn) {
-            return { ok: false, message: 'Send button not found after clicking Connect' };
-          }
-          await sendBtn.click();
+        // Open the note field, then type into it (typing needs a real handle).
+        await page.evaluate(() => {
+          const btn = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) => {
+            const t = (b.textContent ?? '').trim().toLowerCase();
+            const a = (b.getAttribute('aria-label') ?? '').trim().toLowerCase();
+            return /a(ñ|n)adir (una )?nota|add a? ?note/.test(t) || /a(ñ|n)adir (una )?nota|add a? ?note/.test(a);
+          });
+          btn?.click();
+        });
+        await this.delay(500, 800);
+        const textarea = await page.$('textarea[name="message"], textarea[id*="custom-message"], div[role="dialog"] textarea');
+        if (textarea) {
+          await textarea.type(message.substring(0, 300), { delay: 25 }).catch(() => {});
+          await this.delay(400, 600);
         }
       }
 
-      await this.delay(1000, 1500);
+      // Click the final send button (Send / Enviar / Send without a note), in-page.
+      const sent = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
+        const match = (words: string[]) =>
+          all.find((b) => {
+            const t = (b.textContent ?? '').trim().toLowerCase();
+            const a = (b.getAttribute('aria-label') ?? '').trim().toLowerCase();
+            return words.some((w) => t === w || a === w) && b.offsetParent !== null && !b.disabled;
+          });
+        const btn =
+          match(['enviar sin nota', 'send without a note', 'send without note']) ??
+          match(['enviar', 'send']);
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
 
-      // Guardar en DB
+      if (!sent) {
+        return { ok: false, message: 'Could not find the Send button in the invite dialog' };
+      }
+
+      await this.delay(1200, 1800);
       await this.upsertConnection({ name, headline, profileUrl, note: message });
-      this.logger.log(`Invite sent to ${name}`);
-      return { ok: true, message: `Invite sent to ${name}` };
+      this.logger.log(`Invite sent to ${name || profileUrl}`);
+      return { ok: true, message: `Invite sent to ${name || profileUrl}` };
     } finally {
       await page.close();
     }
@@ -148,126 +178,6 @@ export class ConnectionsService {
 
   // ─── Helpers privados ─────────────────────────────────────────────────────
 
-  /**
-   * Find and return the "Conectar" / "Connect" button on a LinkedIn profile page.
-   *
-   * LinkedIn often hides "Connect" inside the "Más" (More) overflow dropdown.
-   * We scope ALL searches to the profile top-card section to avoid accidentally
-   * clicking "Conectar" buttons that appear in the "Más perfiles para ti"
-   * (suggested profiles) carousel at the bottom of the page.
-   *
-   * Flow:
-   *   1. Check if there is a direct Connect button in the top-card area.
-   *   2. If not, click the "Más" / "More actions" button → dropdown opens.
-   *   3. Find "Conectar" inside the dropdown and return it.
-   */
-  private async findConnectButton(page: any): Promise<any | null> {
-    // ── Scope to the profile top-card ─────────────────────────────────────────
-    // LinkedIn's profile header is always the first <section> inside <main>,
-    // contained in one of these selectors. We look for the first match.
-    const TOP_CARD_SEL =
-      '.pv-top-card, ' +
-      'section.artdeco-card:first-of-type, ' +
-      '.ph5.pb5, ' +
-      'main section:first-of-type';
-
-    const topCard = await page.$(TOP_CARD_SEL).catch(() => null);
-    const scope = topCard ?? page; // fall back to full page if we can't narrow
-
-    // ── 1. Direct "Conectar" button (visible without dropdown) ───────────────
-    const CONNECT_ARIA = [
-      '[aria-label*="Invite"][aria-label*="connect" i]',
-      '[aria-label*="Connect" i]',
-      '[aria-label*="Conectar" i]',
-    ];
-    for (const sel of CONNECT_ARIA) {
-      const btn = await scope.$(sel).catch(() => null);
-      if (btn && await btn.isVisible().catch(() => false)) {
-        this.logger.debug('Connect button found directly in top-card');
-        return btn;
-      }
-    }
-
-    // Also try by text content, but only inside the top-card
-    const topCardBtns: any[] = topCard ? await topCard.$$('button').catch(() => []) : [];
-    for (const btn of topCardBtns) {
-      const txt = ((await btn.textContent().catch(() => '')) ?? '').trim().toLowerCase();
-      if (txt === 'conectar' || txt === 'connect') {
-        this.logger.debug(`Connect button found by text inside top-card: "${txt}"`);
-        return btn;
-      }
-    }
-
-    // ── 2. Click the "Más" / "More actions" dropdown in the top-card ─────────
-    const moreBtn = await this.findMoreActionsButton(page, topCard);
-    if (!moreBtn) {
-      this.logger.debug('No direct Connect button and no "Más" button found');
-      return null;
-    }
-
-    this.logger.debug('Clicking "Más" to open overflow menu');
-    await moreBtn.click();
-
-    // ── 3. Find "Conectar" in the dropdown using innerText ────────────────────
-    // Important: use innerText (rendered visible text) NOT textContent, because
-    // textContent includes SVG <title> hidden text which confuses exact matching.
-    // Also: .artdeco-dropdown__content is the reliable container LinkedIn uses.
-    const DROPDOWN = '.artdeco-dropdown__content';
-    await page.waitForSelector(DROPDOWN, { timeout: 3000 }).catch(() => {});
-    await this.delay(300, 400); // let items fully render
-
-    // Grab all clickable items inside the dropdown
-    const items: any[] = await page.$$(
-      `${DROPDOWN} a, ${DROPDOWN} button, ${DROPDOWN} [role="menuitem"], ${DROPDOWN} li`,
-    ).catch(() => []);
-
-    for (const item of items) {
-      // innerText respects CSS visibility and excludes hidden SVG text
-      const innerText: string = await page
-        .evaluate((el: Element) => (el as HTMLElement).innerText?.trim().toLowerCase() ?? '', item)
-        .catch(() => '');
-
-      this.logger.debug(`Dropdown innerText: "${innerText.substring(0, 40)}"`);
-
-      if (innerText === 'conectar' || innerText === 'connect') {
-        this.logger.debug('Found "Conectar" via innerText — returning');
-        return item;
-      }
-    }
-
-    this.logger.debug('Dropdown opened but no "Conectar" found. Items: ' + items.length);
-    return null;
-  }
-
-  /** Find the "Más acciones" / "More actions" button scoped to the top-card */
-  private async findMoreActionsButton(page: any, topCard: any): Promise<any | null> {
-    const MORE_ARIA = [
-      'button[aria-label*="Más acciones" i]',
-      'button[aria-label*="More actions" i]',
-      'button[aria-label*="más" i]',
-    ];
-
-    const scope = topCard ?? page;
-    for (const sel of MORE_ARIA) {
-      const btn = await scope.$(sel).catch(() => null);
-      if (btn && await btn.isVisible().catch(() => false)) return btn;
-    }
-
-    // Fallback: text-based search inside top-card only
-    const buttons: any[] = topCard ? await topCard.$$('button').catch(() => []) : [];
-    for (const btn of buttons) {
-      const label = ((await btn.getAttribute('aria-label').catch(() => '')) ?? '').toLowerCase();
-      const txt = ((await btn.textContent().catch(() => '')) ?? '').trim().toLowerCase();
-      if (
-        label.includes('más acciones') || label.includes('more actions') ||
-        txt === 'más' || txt === 'more'
-      ) {
-        return btn;
-      }
-    }
-
-    return null;
-  }
 
   private async upsertConnection({ name, headline, profileUrl, note }: {
     name: string; headline: string | null; profileUrl: string; note?: string;
