@@ -271,23 +271,47 @@ export class OutreachService {
         waitUntil: 'domcontentloaded', timeout: 20000,
       });
       await this.delay(2000, 3000);
-      await page.evaluate(() => window.scrollBy(0, 600));
-      await this.delay(1000, 1500);
+      // The "hiring team / job poster" block is lower on the page — scroll it into
+      // view in steps so lazy-loaded content renders.
+      for (let i = 0; i < 4; i++) {
+        await page.evaluate(() => window.scrollBy(0, 700));
+        await this.delay(600, 900);
+      }
+      // LinkedIn hashes all class names, so the old `.hirer-card` selector no longer
+      // matches. The job poster is the profile link (`a[href*="/in/"]`) inside the
+      // "Anunciante del empleo / Meet the hiring team" section. Prefer a link whose
+      // surrounding text names that section; otherwise fall back to the only /in/ link.
+      const recruiter = await page.evaluate(() => {
+        const HIRE_CTX = /anunciante del empleo|equipo de contrataci|hiring team|conoce a|qui[eé]n contrata|job poster/i;
+        const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]'));
+        if (!links.length) return null;
 
-      const linkEl = await page.$('[class*="hirer-card"] a[href*="/in/"], .job-poster a[href*="/in/"]');
-      if (!linkEl) return null;
+        const pick =
+          links.find((a) => HIRE_CTX.test((a.closest('section,div,li')?.textContent ?? ''))) ??
+          links[0];
 
-      const href = await linkEl.getAttribute('href');
-      const profile_url =
-        'https://www.linkedin.com' +
-        (href ?? '').split('?')[0].replace('https://www.linkedin.com', '');
-      const name = await linkEl.textContent().then((t: string) => t?.trim() ?? '').catch(() => '');
-      const headlineEl = await page.$('[class*="hirer-card"] [class*="subtitle"], [class*="hirer-card"] .text-body-small');
-      const headline = headlineEl
-        ? await headlineEl.textContent().then((t: string) => t?.trim()).catch(() => null)
-        : null;
+        const href = (pick.getAttribute('href') ?? '').split('?')[0];
+        const slug = href.match(/\/in\/([^/?#]+)/)?.[1];
+        if (!slug) return null;
 
-      return { name, profile_url, headline };
+        // Anchor text mashes name + degree + headline: "Viktor V.• 3erPrivacy Advocate…"
+        const raw = (pick.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const name = raw.split('•')[0].trim();
+        const after = raw.includes('•') ? raw.split('•').slice(1).join('•') : '';
+        // Drop a leading degree token (1er / 2º / 3er / 1st…) glued to the headline,
+        // and the trailing "Anunciante del empleo / Job poster / Meet the hiring team"
+        // label that LinkedIn appends inside the same block.
+        const headline =
+          after
+            .replace(/^\s*(\d+(er|º|ª|st|nd|rd|th)?|3er\+)\s*/i, '')
+            .replace(/\s*(anunciante del empleo|job poster|meet the hiring team|equipo de contrataci[oó]n).*$/i, '')
+            .trim() || null;
+
+        return { name, profile_url: `https://www.linkedin.com/in/${slug}`, headline };
+      }).catch(() => null);
+
+      if (!recruiter || !recruiter.name) return null;
+      return recruiter;
     } finally {
       await page.close();
     }
