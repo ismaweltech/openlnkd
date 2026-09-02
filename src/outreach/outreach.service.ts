@@ -411,36 +411,55 @@ export class OutreachService {
 
   private async readInboxViaBrowser(limit: number): Promise<InboxMessage[]> {
     const page = await this.browser.newPage();
-    const messages: InboxMessage[] = [];
 
     try {
       await page.goto('https://www.linkedin.com/messaging/', {
         waitUntil: 'domcontentloaded', timeout: 20000,
       });
-      await this.delay(3000, 4000);
+      // Wait for the conversation list to render (it lazy-loads) instead of a
+      // fixed delay, which was too short and returned an empty list.
+      await page
+        .waitForSelector(
+          'ul[class*="conversations-list"] > li, .msg-conversations-container__conversations-list > li',
+          { timeout: 12000 },
+        )
+        .catch(() => null);
+      await this.delay(1500, 2500);
 
-      const conversations = await page.$$('.msg-conversation-listitem, [class*="msg-conversation-listitem"]');
-      for (const conv of conversations.slice(0, limit)) {
-        try {
-          const nameEl = await conv.$('.msg-conversation-listitem__participant-names, [class*="participant-names"]');
-          const name = await nameEl?.textContent().then((t: string) => t?.trim() ?? '').catch(() => '') ?? '';
-          const linkEl = await conv.$('a[href*="/messaging/"]');
-          const href = await linkEl?.getAttribute('href').catch(() => null);
-          const senderUrl = href ? `https://www.linkedin.com${href}` : '';
-          const previewEl = await conv.$('.msg-conversation-listitem__message-snippet, [class*="message-snippet"]');
-          const preview = await previewEl?.textContent().then((t: string) => t?.trim() ?? '').catch(() => '') ?? '';
-          const timeEl = await conv.$('time, [class*="timestamp"]');
-          const timestamp = await timeEl?.getAttribute('datetime').catch(() => null) ?? null;
-          const unreadEl = await conv.$('[class*="notification-badge"], [class*="unread"]');
-          const unread = !!unreadEl;
-          if (name) messages.push({ senderName: name, senderUrl, preview, timestamp, unread });
-        } catch { /* skip */ }
-      }
+      // Each conversation is a real <li> in the conversations list. The old
+      // `.msg-conversation-listitem` selector also matched nested <h3>/<div>/<time>
+      // carrying the same class fragment, which produced duplicate rows — so we
+      // anchor on the list's direct <li> children instead. The participant name is
+      // in an <h3>, the preview in a <p>. The list does NOT expose the person's
+      // profile URL (it would require opening each thread), so senderUrl stays empty.
+      const rows: InboxMessage[] = await page.evaluate((max) => {
+        const lis = Array.from(
+          document.querySelectorAll(
+            'ul[class*="conversations-list"] > li, .msg-conversations-container__conversations-list > li',
+          ),
+        );
+        const out: any[] = [];
+        const seen = new Set<string>();
+        for (const li of lis) {
+          const el = li as HTMLElement;
+          const senderName = (el.querySelector('h3')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+          if (!senderName) continue; // header / placeholder row
+          const preview = (el.querySelector('p')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+          const key = `${senderName}::${preview.slice(0, 60)}`;
+          if (seen.has(key)) continue; // dedupe
+          seen.add(key);
+          const timestamp = el.querySelector('time')?.textContent?.trim() || null;
+          const unread = !!el.querySelector('[class*="unread"], [class*="notification-badge"]');
+          out.push({ senderName, senderUrl: '', preview, timestamp, unread });
+          if (out.length >= max) break;
+        }
+        return out;
+      }, limit);
+
+      return rows;
     } finally {
       await page.close();
     }
-
-    return messages;
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
