@@ -709,10 +709,48 @@ export class CompaniesService {
 
     try {
       const results = await this.locations.typeahead(params.location);
-      return results[0]?.id ?? null;
+      return this.pickBestGeoId(params.location, results);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * LinkedIn's typeahead does NOT return the obvious match first: "Valencia"
+   * yields "España" first, "Sevilla" yields "Sevilla, Ecuador". Taking results[0]
+   * blindly searched the wrong country. This scores candidates by how well the
+   * label's city segment matches the query, and prefers a configured country
+   * (default España — the whole URN map is Spain-centric; override with
+   * OPENLNKD_LOCATION_COUNTRY) to disambiguate same-named cities. The preference
+   * only breaks ties when a matching-country result exists, so non-Spanish
+   * queries (e.g. "Berlin") still resolve to their best name match.
+   */
+  private pickBestGeoId(query: string, results: { id: string; label: string }[]): string | null {
+    if (!results.length) return null;
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+    const q = norm(query);
+    const country = norm(process.env.OPENLNKD_LOCATION_COUNTRY ?? 'España');
+
+    const score = (label: string): number => {
+      const n = norm(label);
+      const seg0 = norm(label.split(',')[0]);
+      let s = 0;
+      if (seg0 === q) s += 4;            // exact city name ("Sevilla")
+      else if (seg0.includes(q)) s += 2; // e.g. "Valencia/València"
+      else if (n.includes(q)) s += 1;
+      if (country && n.includes(country)) s += 3; // prefer the configured country
+      if (!label.includes(',')) s -= 2;            // country-only result ("España")
+      if (/ y alrededores$| area$/i.test(label)) s -= 1; // metro is less precise than the city
+      return s;
+    };
+
+    let best = results[0];
+    let bestScore = -Infinity;
+    for (const r of results) {
+      const sc = score(r.label);
+      if (sc > bestScore) { bestScore = sc; best = r; }
+    }
+    return best.id;
   }
 
   private delay(min: number, max: number) {
