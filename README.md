@@ -309,6 +309,7 @@ Search LinkedIn profiles by role, company or connection degree. Results are save
 |---|---|---|
 | `POST` | `/people/search` | Search LinkedIn profiles and save to DB |
 | `GET` | `/people` | List saved profiles with filters |
+| `GET` | `/people/:slug/activity` | Scrape a person's recent posts & reposts |
 
 ```bash
 # Find CTOs in Spain who are 2nd-degree connections
@@ -333,6 +334,28 @@ GET /people?connectionDegree=1st
 | `company` | Current company name |
 | `location` | City or country |
 | `limit` | Max results, default `25` |
+
+**Audience research — read what a person posts about:**
+
+```bash
+# Last 10 posts/reposts from a profile (slug = the part after /in/)
+GET /people/jordi-romero/activity?limit=10
+```
+
+Scrapes the profile's recent-activity feed. Useful for working out the topics, pains and patterns a persona (CEO, CFO, CMO…) talks about before you target them. Each item:
+
+```json
+{
+  "type": "repost",            // "post" = authored, "repost" = shared
+  "body": "No es solo streaming: es la mayor infraestructura…",
+  "text": "full card text incl. author header",
+  "age": "4 d",
+  "reactions": 9,
+  "comments": 0
+}
+```
+
+Combine it with `/people/search` or `/companies/:id/people`: find the right people in a niche, then read their activity to mine content ideas and messaging angles.
 
 ---
 

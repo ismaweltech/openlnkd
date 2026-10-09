@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import type { PeopleSearchParams } from './people.service';
 import { PeopleService } from './people.service';
@@ -30,5 +30,18 @@ export class PeopleController {
     @Query('location') location?: string,
   ) {
     return this.people.findAll({ keyword, company, connectionDegree, location });
+  }
+
+  @Get(':slug/activity')
+  @ApiOperation({
+    summary: "Scrape a person's recent posts and reposts",
+    description:
+      'Reads the profile\'s recent-activity feed for audience research — each item has ' +
+      'text, body, type (post/repost), age and engagement. `slug` is the LinkedIn ' +
+      'public identifier (the part after /in/). Use ?limit=N (default 10).',
+  })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max posts (default 10)' })
+  getActivity(@Param('slug') slug: string, @Query('limit') limit?: string) {
+    return this.people.getActivity(slug, limit ? parseInt(limit, 10) : 10);
   }
 }

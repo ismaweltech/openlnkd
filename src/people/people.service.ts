@@ -25,6 +25,20 @@ export interface PeopleSearchParams {
   limit?: number;
 }
 
+export interface ActivityPost {
+  /** 'post' = authored by this person, 'repost' = shared from someone else */
+  type: 'post' | 'repost';
+  /** full visible text of the update (author header + body, cleaned) */
+  text: string;
+  /** post body only, with the repost/author header stripped */
+  body: string;
+  /** relative age as LinkedIn shows it ("4 d", "2 sem", "1 mes") */
+  age: string | null;
+  /** reactions + comments counts when present on the card */
+  reactions: number | null;
+  comments: number | null;
+}
+
 @Injectable()
 export class PeopleService {
   private readonly logger = new Logger(PeopleService.name);
@@ -333,6 +347,101 @@ export class PeopleService {
       [person.id, person.name, person.headline, person.location,
        person.profile_url, person.connection_degree, person.company, person.scraped_at],
     );
+  }
+
+  // ── Activity / posts ────────────────────────────────────────────────────────
+
+  /**
+   * Scrape a person's recent LinkedIn activity (their posts and reposts) for
+   * audience research — spotting the topics, pains and patterns they talk about.
+   *
+   * Reads /in/<slug>/recent-activity/all/. Each post is a stable
+   * [componentkey^="update-card-focus"] element (LinkedIn hashes CSS classes but
+   * keeps componentkey). Scrolls to lazy-load more, then extracts text, type
+   * (own post vs repost), age and engagement.
+   */
+  async getActivity(slug: string, limit = 10): Promise<ActivityPost[]> {
+    await this.session.ensureAuthenticated();
+    const page = await this.browser.newPage();
+    try {
+      await page.goto(
+        `https://www.linkedin.com/in/${slug}/recent-activity/all/`,
+        { waitUntil: 'domcontentloaded', timeout: 25000 },
+      );
+      await this.delay(3000, 4000);
+
+      // Lazy-load: scroll until we have enough post cards (or we stop growing).
+      let last = 0;
+      for (let i = 0; i < 12; i++) {
+        const count = await page
+          .$$eval('[componentkey^="update-card-focus"]', (els) => els.length)
+          .catch(() => 0);
+        if (count >= limit) break;
+        if (count === last && i > 2) break; // no new posts loading → stop
+        last = count;
+        await page.evaluate(() => window.scrollBy(0, 1400));
+        await this.delay(1000, 1500);
+      }
+
+      const posts: ActivityPost[] = await page.evaluate((max) => {
+        const cards = Array.from(document.querySelectorAll<HTMLElement>('[componentkey^="update-card-focus"]'));
+        const parseCount = (s: string): number | null => {
+          const m = s.replace(/\./g, '').match(/(\d+)/);
+          if (!m) return null;
+          let n = parseInt(m[1], 10);
+          if (/mil|k/i.test(s)) n *= 1000;
+          return n;
+        };
+        const out: any[] = [];
+        for (const card of cards) {
+          if (out.length >= max) break;
+          const full = (card.innerText ?? '').replace(/\r/g, '').trim();
+          if (!full) continue;
+          const lines = full.split('\n').map((l) => l.trim()).filter(Boolean);
+
+          // Repost marker: "<Name> ha/han compartido esto" / "reposted this".
+          const REPOST = /\b(ha|han|he|hemos)\s+compartido esto|comparti[oó]\b|reposted this|shared this/i;
+          const isRepost = REPOST.test(full.slice(0, 200));
+
+          // Age token ("4 d", "2 sem", "1 mes", "3 h")
+          const age = (full.match(/\b(\d+\s*(?:min|h|d|sem|semanas?|mes(?:es)?|años?|yr|w|mo))\b/i) ?? [])[1] ?? null;
+
+          // Engagement: "X reacciones" / "Y comentarios" (ES) or "reactions"/"comments" (EN)
+          const reactions = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:reacciones|reactions)/i) ?? [])[1];
+          const comments = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:comentarios|comments)/i) ?? [])[1];
+
+          // Body: strip the card chrome (feed label, repost header, author name/
+          // headline, date, "Seguir", translation + engagement/CTA footer) and keep
+          // the actual post text. We drop everything up to the date line, which
+          // sits right before the body on LinkedIn update cards.
+          const dateIdx = lines.findIndex((l) => /^\d+\s*(?:min|h|d|sem|mes|año|w|mo|yr)/i.test(l));
+          const afterDate = dateIdx >= 0 ? lines.slice(dateIdx + 1) : lines;
+          const bodyLines = afterDate.filter((l) =>
+            !/^(publicaci[oó]n en el feed|seguir|follow|ver traducci[oó]n|mostrar traducci[oó]n|see translation|\.{3}\s*más|…\s*más|más|ver más|see more)$/i.test(l) &&
+            !REPOST.test(l) &&
+            !/^(ir al sitio web|visit|visitar)/i.test(l) &&
+            !/^([\d.]+(?:\s*mil)?\s*(reacciones|reactions|comentarios|comments|veces compartido|reposts?))$/i.test(l) &&
+            !/^(recomendar|comentar|compartir|enviar|like|comment|share|send|me gusta)$/i.test(l),
+          );
+          const body = bodyLines.join('\n').trim();
+
+          out.push({
+            type: isRepost ? 'repost' : 'post',
+            text: full.slice(0, 3000),
+            body: body.slice(0, 3000),
+            age,
+            reactions: reactions ? parseCount(reactions) : null,
+            comments: comments ? parseCount(comments) : null,
+          });
+        }
+        return out;
+      }, limit);
+
+      this.logger.log(`Activity for ${slug}: ${posts.length} posts`);
+      return posts;
+    } finally {
+      await page.close();
+    }
   }
 
   private delay(min: number, max: number) {
