@@ -157,7 +157,14 @@ export class JobsService {
       await this.delay(2000, 3000);
 
       let attempts = 0;
+      let skipped = 0;
       while (jobs.length < limit && attempts < 10) {
+        // The results list is virtualized: LinkedIn only builds the inner
+        // div[data-job-id] for cards near the viewport, so the rest are empty
+        // <li> shells. Render them before reading, or we only ever see the
+        // first screenful (7 of 25, measured 2026-09-02).
+        await this.renderOccludedCards(page);
+
         let cards: any[];
         try {
           cards = await page.$$(
@@ -177,11 +184,12 @@ export class JobsService {
           if (jobs.length >= limit) break;
           try {
             const job = await this.extractJobCard(card, page);
-            if (job && !jobs.find((j) => j.id === job.id)) {
+            if (!job) { skipped++; continue; }
+            if (!jobs.find((j) => j.id === job.id)) {
               jobs.push(job);
               await this.upsertJob(job);
             }
-          } catch { /* skip malformed card */ }
+          } catch { skipped++; }
         }
 
         if (jobs.length >= limit) break;
@@ -189,6 +197,8 @@ export class JobsService {
         if (!hasNext) break;
         attempts++;
       }
+      // Silent drops used to hide a 3.5x under-collection — say it out loud
+      if (skipped) this.logger.debug(`${skipped} cards yielded no job (unparseable)`);
     } finally {
       await page.close();
     }
@@ -536,7 +546,11 @@ export class JobsService {
 
   private async extractJobCard(card: any, _page: any): Promise<Job | null> {
     // ElementHandle: usar card.$() en vez de card.locator()
-    const id = await card.getAttribute('data-job-id').catch(() => null);
+    // Virtualized rows carry the id on the <li> shell (data-occludable-job-id);
+    // only the rendered inner div has data-job-id.
+    const id =
+      (await card.getAttribute('data-job-id').catch(() => null)) ??
+      (await card.getAttribute('data-occludable-job-id').catch(() => null));
     if (!id) {
       // New SDUI search UI (2026): cards carry componentkey="job-card-component-ref-<id>"
       const key = await card.getAttribute('componentkey').catch(() => null);
@@ -594,6 +608,10 @@ export class JobsService {
       '.job-card-list__footer-wrapper',
       '[class*="footer-wrapper"]',
     ]);
+
+    // A shell that never rendered gives an empty title — drop it instead of
+    // storing a blank row that dedupe would then treat as "already seen"
+    if (!title) return null;
 
     const postedAt = await getAttr(['time'], 'datetime');
 
@@ -687,32 +705,51 @@ export class JobsService {
     return new Date(Date.now() - n * msPer).toISOString();
   }
 
+  /**
+   * Walks every virtualized row into view so LinkedIn builds its inner card.
+   * Rows already rendered are skipped, so this is cheap on repeat passes.
+   */
+  private async renderOccludedCards(page: any): Promise<void> {
+    try {
+      await page.evaluate(async () => {
+        const rows = Array.from(
+          document.querySelectorAll<HTMLElement>('li[data-occludable-job-id]'),
+        );
+        for (const row of rows) {
+          if (row.innerText.trim().length > 10) continue;
+          row.scrollIntoView({ block: 'center' });
+          await new Promise((r) => setTimeout(r, 120));
+        }
+      });
+      await this.delay(800, 1200);
+    } catch {
+      // SPA navigation killed the context — the caller's retry loop handles it
+    }
+  }
+
   private async scrollAndLoadMore(page: any): Promise<boolean> {
-    // LinkedIn jobs sidebar is a scrollable div, not the body
-    await page.evaluate(() => {
-      const list = document.querySelector(
-        '.jobs-search__results-list, ' +
-        '.scaffold-layout__list, ' +
-        '[class*="jobs-search-results-list"], ' +
-        'ul[class*="jobs-search"]',
-      );
-      if (list) {
-        list.scrollBy(0, 800);
-        return;
-      }
-      // SDUI UI: results live in a lazy-column — scroll its nearest scrollable ancestor
-      let el: Element | null = document.querySelector('[data-testid="lazy-column"]');
-      while (el) {
-        if (el.scrollHeight > el.clientHeight + 50) {
-          el.scrollBy(0, 800);
-          return;
+    // The scrolling element ships a hashed class name in the 2026 UI, and
+    // `.scaffold-layout__list` — the old target — does NOT scroll
+    // (scrollHeight === clientHeight), so scrolling it was a silent no-op.
+    // Find the real container by geometry instead of by selector.
+    const moved = await page.evaluate(() => {
+      const row = document.querySelector('li[data-occludable-job-id], div[data-job-id]');
+      let el: Element | null = row?.parentElement ?? null;
+      while (el && el !== document.body) {
+        const overflowY = getComputedStyle(el).overflowY;
+        if (el.scrollHeight > el.clientHeight + 50 && /auto|scroll/.test(overflowY)) {
+          const before = el.scrollTop;
+          el.scrollTop = el.scrollHeight;
+          return el.scrollTop > before; // false → already at the bottom
         }
         el = el.parentElement;
       }
+      const before = window.scrollY;
       window.scrollBy(0, 800);
+      return window.scrollY > before;
     });
     await this.delay(2000, 3000);
-    return true; // keep looping until attempts limit or job limit
+    return moved;
   }
 
   private async upsertJob(job: Job): Promise<void> {

@@ -7,3 +7,6 @@ data/
 # Internal test dashboard — not part of the public release
 client/
 public/
+.env.*
+*.bak
+!.env.example
