@@ -147,6 +147,7 @@ npm run start:dev
 |---|---|---|
 | `POST` | `/session/login` | Authenticate with LinkedIn |
 | `GET` | `/session/status` | Check if session is active |
+| `GET` | `/session/me` | Your own profile slug and URL |
 | `DELETE` | `/session/logout` | Clear session and cookies |
 
 ```bash
@@ -311,6 +312,7 @@ Search LinkedIn profiles by role, company or connection degree. Results are save
 | `GET` | `/people` | List saved profiles with filters |
 | `GET` | `/people/:slug/activity` | Scrape a person's recent posts & reposts |
 | `GET` | `/people/:slug/comments` | Scrape the comments a person left on others' posts |
+| `GET` | `/people/:slug/profile` | Followers, headline, recent posts and engagement metrics in one visit |
 
 ```bash
 # Find CTOs in Spain who are 2nd-degree connections
@@ -365,6 +367,35 @@ GET /people/jordi-romero/comments?limit=10
 ```
 
 People are far more honest commenting on others' posts than publishing their own. Each item returns their `comment`, the `onPostBy` author they replied to, an `onPost` snippet for context, and `age`. This is the strongest source for a persona's real opinions and frustrations.
+
+**Benchmark people — competitors, references, creators you want to learn from:**
+
+```bash
+GET /people/jorgecalvomartin/profile?posts=8
+```
+
+```json
+{
+  "name": "…", "headline": "…", "followers": 14819,
+  "metrics": {
+    "ownPosts": 8, "ownRatio": 1,
+    "medianEngagement": 54,      // median reactions+comments per own post
+    "maxEngagement": 120,
+    "lastOwnPostDays": 0,        // is this person actually active?
+    "ownPostsLast30d": 6
+  },
+  "posts": [ /* same shape as /activity */ ]
+}
+```
+
+One page visit per person. Uses the **median** on purpose, so one viral post doesn't make someone look consistently strong. Loop it over the results of a few `/people/search` queries, keep people with `lastOwnPostDays <= 30`, and rank by `medianEngagement` (or `medianEngagement / followers` for engagement rate) to find who actually performs in your niche.
+
+**Your own reach.** Each post item carries `days`, `reactions`, `comments`, `reposts` and `impressions`. LinkedIn only shows impressions to a post's author, so they're filled in only for your own profile:
+
+```bash
+GET /session/me                          # → { "slug": "your-slug", ... }
+GET /people/your-slug/profile?posts=20   # impressions per post = what actually reached people
+```
 
 ---
 

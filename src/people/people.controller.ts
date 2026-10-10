@@ -45,6 +45,20 @@ export class PeopleController {
     return this.people.getActivity(slug, limit ? parseInt(limit, 10) : 10);
   }
 
+  @Get(':slug/profile')
+  @ApiOperation({
+    summary: 'One-visit profile summary: followers, headline, recent posts and engagement metrics',
+    description:
+      'For benchmarking competitors, references or personas. Metrics use the median ' +
+      'engagement across own posts (robust to a single viral post), plus days since the ' +
+      'last own post and own-vs-repost ratio. Impressions are only present on your own ' +
+      'profile. ?posts=N posts to sample (default 8).',
+  })
+  @ApiQuery({ name: 'posts', required: false, type: Number, description: 'Posts to sample (default 8)' })
+  getProfile(@Param('slug') slug: string, @Query('posts') posts?: string) {
+    return this.people.getProfile(slug, posts ? parseInt(posts, 10) : 8);
+  }
+
   @Get(':slug/comments')
   @ApiOperation({
     summary: "Scrape the comments a person has left on others' posts",

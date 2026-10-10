@@ -34,9 +34,38 @@ export interface ActivityPost {
   body: string;
   /** relative age as LinkedIn shows it ("4 d", "2 sem", "1 mes") */
   age: string | null;
+  /** age converted to days (approximate: 1 sem = 7, 1 mes = 30, 1 año = 365) */
+  days: number | null;
   /** reactions + comments counts when present on the card */
   reactions: number | null;
   comments: number | null;
+  /** times shared ("1 vez compartido") */
+  reposts: number | null;
+  /**
+   * Impressions (reach). LinkedIn only shows these to the post's author, so this
+   * is filled in only when scraping your own profile — null for anyone else.
+   */
+  impressions: number | null;
+}
+
+export interface ProfileSummary {
+  slug: string;
+  name: string | null;
+  headline: string | null;
+  followers: number | null;
+  metrics: {
+    postsSampled: number;
+    ownPosts: number;
+    /** share of sampled items that are authored (vs reposts), 0–1 */
+    ownRatio: number | null;
+    /** median reactions+comments across own posts — robust to one viral outlier */
+    medianEngagement: number | null;
+    maxEngagement: number | null;
+    /** days since the most recent own post */
+    lastOwnPostDays: number | null;
+    ownPostsLast30d: number;
+  };
+  posts: ActivityPost[];
 }
 
 export interface ActivityComment {
@@ -372,6 +401,54 @@ export class PeopleService {
    * (own post vs repost), age and engagement.
    */
   async getActivity(slug: string, limit = 10): Promise<ActivityPost[]> {
+    const { posts } = await this.scrapeRecentActivity(slug, limit);
+    this.logger.log(`Activity for ${slug}: ${posts.length} posts`);
+    return posts;
+  }
+
+  /**
+   * One-visit profile summary for benchmarking people (competitors, references,
+   * personas): followers, headline, recent posts and engagement metrics.
+   * The median is used on purpose — a single viral post shouldn't make someone
+   * look consistently strong.
+   */
+  async getProfile(slug: string, limit = 8): Promise<ProfileSummary> {
+    const r = await this.scrapeRecentActivity(slug, limit);
+    const own = r.posts.filter((p) => p.type === 'post');
+    const eng = own.map((p) => (p.reactions ?? 0) + (p.comments ?? 0)).sort((a, b) => a - b);
+    const median = !eng.length
+      ? null
+      : eng.length % 2 ? eng[(eng.length - 1) / 2] : (eng[eng.length / 2 - 1] + eng[eng.length / 2]) / 2;
+    const ownDays = own.map((p) => p.days).filter((d): d is number => d !== null);
+
+    this.logger.log(`Profile ${slug}: ${r.followers ?? '?'} followers, ${own.length}/${r.posts.length} own posts`);
+    return {
+      slug,
+      name: r.name,
+      headline: r.headline,
+      followers: r.followers,
+      metrics: {
+        postsSampled: r.posts.length,
+        ownPosts: own.length,
+        ownRatio: r.posts.length ? Math.round((own.length / r.posts.length) * 100) / 100 : null,
+        medianEngagement: median,
+        maxEngagement: eng.length ? eng[eng.length - 1] : null,
+        lastOwnPostDays: ownDays.length ? Math.min(...ownDays) : null,
+        ownPostsLast30d: ownDays.filter((d) => d <= 30).length,
+      },
+      posts: r.posts,
+    };
+  }
+
+  /**
+   * Single visit to /in/<slug>/recent-activity/all/ shared by getActivity and
+   * getProfile. Each post is a stable [componentkey^="update-card-focus"] element
+   * (LinkedIn hashes CSS classes but keeps componentkey). The left profile card on
+   * the same page carries the name, headline and follower count.
+   */
+  private async scrapeRecentActivity(slug: string, limit: number): Promise<{
+    posts: ActivityPost[]; followers: number | null; name: string | null; headline: string | null;
+  }> {
     await this.session.ensureAuthenticated();
     const page = await this.browser.newPage();
     try {
@@ -394,15 +471,23 @@ export class PeopleService {
         await this.delay(1000, 1500);
       }
 
-      const posts: ActivityPost[] = await page.evaluate((max) => {
-        const cards = Array.from(document.querySelectorAll<HTMLElement>('[componentkey^="update-card-focus"]'));
+      const result = await page.evaluate((max) => {
         const parseCount = (s: string): number | null => {
-          const m = s.replace(/\./g, '').match(/(\d+)/);
+          const m = s.replace(/[.,]/g, '').match(/(\d+)/);
           if (!m) return null;
           let n = parseInt(m[1], 10);
           if (/mil|k/i.test(s)) n *= 1000;
           return n;
         };
+
+        // Left profile card: "<name>\n<headline>\nSeguidores\n1.637\n…"
+        const pageLines = (document.body.innerText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+        const fi = pageLines.findIndex((l) => /^(seguidores|followers)$/i.test(l));
+        const followers = fi >= 0 && pageLines[fi + 1] ? parseCount(pageLines[fi + 1]) : null;
+        const headline = fi >= 1 ? pageLines[fi - 1] : null;
+        const name = fi >= 2 ? pageLines[fi - 2] : null;
+
+        const cards = Array.from(document.querySelectorAll<HTMLElement>('[componentkey^="update-card-focus"]'));
         const out: any[] = [];
         for (const card of cards) {
           if (out.length >= max) break;
@@ -417,9 +502,26 @@ export class PeopleService {
           // Age token ("4 d", "2 sem", "1 mes", "3 h")
           const age = (full.match(/\b(\d+\s*(?:min|h|d|sem|semanas?|mes(?:es)?|años?|yr|w|mo))\b/i) ?? [])[1] ?? null;
 
-          // Engagement: "X reacciones" / "Y comentarios" (ES) or "reactions"/"comments" (EN)
-          const reactions = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:reacciones|reactions)/i) ?? [])[1];
+          // Reactions come in two shapes: "83 reacciones" on most cards, or — when
+          // people you know reacted (always the case on your own posts) — "Ana
+          // Vázquez y 41 personas más han reaccionado", which means 42.
+          let reactionsN: number | null = null;
+          const rm = full.match(/([\d.]+(?:\s*mil)?)\s*(?:reacciones|reactions)\b/i);
+          if (rm) {
+            reactionsN = parseCount(rm[1]);
+          } else {
+            const om = full.match(/^(.+?)\s+(?:y|and)\s+([\d.]+(?:\s*mil)?)\s+(?:personas?\s+más|others?)/im);
+            if (om) {
+              reactionsN = (parseCount(om[2]) ?? 0) + om[1].split(',').length;
+            } else {
+              const nm = full.match(/^(.+?)\s+(?:ha|han)\s+reaccionado|^(.+?)\s+reacted/im);
+              if (nm) reactionsN = (nm[1] ?? nm[2]).split(/,|\s+y\s+|\s+and\s+/).length;
+            }
+          }
           const comments = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:comentarios|comments)/i) ?? [])[1];
+          const reposts = (full.match(/([\d.]+)\s*(?:vez|veces)\s+compartid[oa]|([\d.]+)\s*reposts?\b/i) ?? []).slice(1).find(Boolean);
+          // Impressions only render on the viewer's own posts ("3,444 impresiones").
+          const impressions = (full.match(/([\d.,]+(?:\s*mil)?)\s*(?:impresiones|impressions)/i) ?? [])[1];
 
           // Body: strip the card chrome (feed label, repost header, author name/
           // headline, date, "Seguir", translation + engagement/CTA footer) and keep
@@ -431,7 +533,10 @@ export class PeopleService {
             !/^(publicaci[oó]n en el feed|seguir|follow|ver traducci[oó]n|mostrar traducci[oó]n|see translation|\.{3}\s*más|…\s*más|más|ver más|see more)$/i.test(l) &&
             !REPOST.test(l) &&
             !/^(ir al sitio web|visit|visitar)/i.test(l) &&
-            !/^([\d.]+(?:\s*mil)?\s*(reacciones|reactions|comentarios|comments|veces compartido|reposts?))$/i.test(l) &&
+            !/^([\d.,]+(?:\s*mil)?\s*(reacciones|reactions|comentarios|comments|veces compartido|reposts?|impresiones|impressions))$/i.test(l) &&
+            !/^(ver estad[ií]sticas|ver an[aá]lisis|view analytics|estad[ií]sticas)/i.test(l) &&
+            !/\b(ha|han)\s+reaccionado$|personas?\s+más$|^•$/i.test(l) &&
+            !/^[\d.]+\s*(vez|veces)\s+compartid[oa]$/i.test(l) &&
             !/^(recomendar|comentar|compartir|enviar|like|comment|share|send|me gusta)$/i.test(l),
           );
           const body = bodyLines.join('\n').trim();
@@ -441,18 +546,35 @@ export class PeopleService {
             text: full.slice(0, 3000),
             body: body.slice(0, 3000),
             age,
-            reactions: reactions ? parseCount(reactions) : null,
+            reactions: reactionsN,
             comments: comments ? parseCount(comments) : null,
+            reposts: reposts ? parseCount(reposts) : null,
+            impressions: impressions ? parseCount(impressions) : null,
           });
         }
-        return out;
+        return { posts: out, followers, name, headline };
       }, limit);
 
-      this.logger.log(`Activity for ${slug}: ${posts.length} posts`);
-      return posts;
+      const posts: ActivityPost[] = result.posts.map((p: any) => ({ ...p, days: this.ageToDays(p.age) }));
+      return { posts, followers: result.followers, name: result.name, headline: result.headline };
     } finally {
       await page.close();
     }
+  }
+
+  /** "4 d" → 4, "2 sem" → 14, "3 meses" → 90, "1 año" → 365, "5 h" → 0. */
+  private ageToDays(age: string | null): number | null {
+    if (!age) return null;
+    const m = age.match(/(\d+)\s*(min|h|d|sem|semanas?|mes(?:es)?|años?|w|mo|yr)/i);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    const u = m[2].toLowerCase();
+    if (u.startsWith('min') || u === 'h') return 0;
+    if (u === 'd') return n;
+    if (u.startsWith('sem') || u === 'w') return n * 7;
+    if (u.startsWith('mes') || u === 'mo') return n * 30;
+    if (u.startsWith('añ') || u === 'yr') return n * 365;
+    return null;
   }
 
   /**

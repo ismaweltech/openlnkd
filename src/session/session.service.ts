@@ -86,6 +86,29 @@ export class SessionService {
     }
   }
 
+  private me: { slug: string; profileUrl: string } | null = null;
+
+  /**
+   * The logged-in account's own profile slug. LinkedIn redirects /in/me/ to the
+   * real profile URL, so one visit resolves it; cached for the process lifetime.
+   * Handy to analyse your own posts (the only ones where impressions are visible).
+   */
+  async getMe(): Promise<{ slug: string; profileUrl: string }> {
+    if (this.me) return this.me;
+    await this.ensureAuthenticated();
+    const page = await this.browser.newPage();
+    try {
+      await page.goto('https://www.linkedin.com/in/me/', { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await page.waitForURL(/\/in\/(?!me\/)[^/?#]+/, { timeout: 10000 }).catch(() => {});
+      const slug = page.url().match(/\/in\/([^/?#]+)/)?.[1];
+      if (!slug || slug === 'me') throw new Error('Could not resolve own profile from /in/me/');
+      this.me = { slug, profileUrl: `https://www.linkedin.com/in/${slug}` };
+      return this.me;
+    } finally {
+      await page.close();
+    }
+  }
+
   /** Returns raw cookies from DB — use for direct HTTP requests to LinkedIn */
   async getRawCookies(): Promise<Array<{ name: string; value: string; domain: string }>> {
     const row = await this.db.queryOne<{ cookies: string }>('SELECT cookies FROM session WHERE id = 1');

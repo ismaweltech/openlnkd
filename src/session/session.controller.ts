@@ -20,6 +20,15 @@ export class SessionController {
     return { authenticated: ok };
   }
 
+  @Get('me')
+  @ApiOperation({
+    summary: "Logged-in account's own profile slug and URL",
+    description: 'Use the slug with /people/:slug/activity or /profile to analyse your own posts, including impressions.',
+  })
+  me() {
+    return this.session.getMe();
+  }
+
   @Delete('logout')
   @ApiOperation({ summary: 'Clear session' })
   async logout() {
