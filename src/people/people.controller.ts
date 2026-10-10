@@ -44,4 +44,17 @@ export class PeopleController {
   getActivity(@Param('slug') slug: string, @Query('limit') limit?: string) {
     return this.people.getActivity(slug, limit ? parseInt(limit, 10) : 10);
   }
+
+  @Get(':slug/comments')
+  @ApiOperation({
+    summary: "Scrape the comments a person has left on others' posts",
+    description:
+      "The most candid signal of what a persona cares about and complains about — " +
+      'people are more honest commenting than posting. Each item has the comment, ' +
+      'the post author it replied to, a snippet of that post, and the age. ?limit=N (default 10).',
+  })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max comments (default 10)' })
+  getComments(@Param('slug') slug: string, @Query('limit') limit?: string) {
+    return this.people.getComments(slug, limit ? parseInt(limit, 10) : 10);
+  }
 }

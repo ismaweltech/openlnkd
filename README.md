@@ -310,6 +310,7 @@ Search LinkedIn profiles by role, company or connection degree. Results are save
 | `POST` | `/people/search` | Search LinkedIn profiles and save to DB |
 | `GET` | `/people` | List saved profiles with filters |
 | `GET` | `/people/:slug/activity` | Scrape a person's recent posts & reposts |
+| `GET` | `/people/:slug/comments` | Scrape the comments a person left on others' posts |
 
 ```bash
 # Find CTOs in Spain who are 2nd-degree connections
@@ -356,6 +357,14 @@ Scrapes the profile's recent-activity feed. Useful for working out the topics, p
 ```
 
 Combine it with `/people/search` or `/companies/:id/people`: find the right people in a niche, then read their activity to mine content ideas and messaging angles.
+
+**Candid signal — what they comment, not just what they post:**
+
+```bash
+GET /people/jordi-romero/comments?limit=10
+```
+
+People are far more honest commenting on others' posts than publishing their own. Each item returns their `comment`, the `onPostBy` author they replied to, an `onPost` snippet for context, and `age`. This is the strongest source for a persona's real opinions and frustrations.
 
 ---
 

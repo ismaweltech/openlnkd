@@ -39,6 +39,17 @@ export interface ActivityPost {
   comments: number | null;
 }
 
+export interface ActivityComment {
+  /** the person's own comment text (the candid part) */
+  comment: string;
+  /** author of the post they commented on */
+  onPostBy: string | null;
+  /** short snippet of that post, for topic/context */
+  onPost: string | null;
+  /** relative age as LinkedIn shows it */
+  age: string | null;
+}
+
 @Injectable()
 export class PeopleService {
   private readonly logger = new Logger(PeopleService.name);
@@ -439,6 +450,94 @@ export class PeopleService {
 
       this.logger.log(`Activity for ${slug}: ${posts.length} posts`);
       return posts;
+    } finally {
+      await page.close();
+    }
+  }
+
+  /**
+   * Scrape the comments a person has left on others' posts — the most candid
+   * signal of what they care about and what frustrates them (people are far more
+   * honest commenting than posting). Reads /recent-activity/comments/.
+   *
+   * Each card is a [componentkey^="update-card-focus"]; the person's own comment
+   * lives in a [componentkey^="CommentComponentReference"] inside it, and its body
+   * is the text right after the "Seguir/Connect" button in the comment header.
+   */
+  async getComments(slug: string, limit = 10): Promise<ActivityComment[]> {
+    await this.session.ensureAuthenticated();
+    const page = await this.browser.newPage();
+    try {
+      await page.goto(
+        `https://www.linkedin.com/in/${slug}/recent-activity/comments/`,
+        { waitUntil: 'domcontentloaded', timeout: 25000 },
+      );
+      await this.delay(3000, 4000);
+
+      let last = 0;
+      for (let i = 0; i < 12; i++) {
+        const count = await page
+          .$$eval('[componentkey^="update-card-focus"]', (els) => els.length)
+          .catch(() => 0);
+        if (count >= limit) break;
+        if (count === last && i > 2) break;
+        last = count;
+        await page.evaluate(() => window.scrollBy(0, 1400));
+        await this.delay(1000, 1500);
+      }
+
+      const comments: ActivityComment[] = await page.evaluate((max) => {
+        const FOLLOW = /^(seguir|conectar|siguiendo|follow|connect|following)$/i;
+        const TIME = /^\(?(editado|edited)?\)?\s*\d+\s*(min|h|d|sem|mes(?:es)?|años?|w|mo|yr)/i;
+        const STOP = /^(…|\.{3}).*(más|more)$|^(me gusta|like|responder|reply|cargar más|load more|ver más|mostrar traducci[oó]n|show translation)$|^\d+\s*(reacci|reaction|respuesta|repl)/i;
+
+        const cards = Array.from(document.querySelectorAll<HTMLElement>('[componentkey^="update-card-focus"]'));
+        const out: any[] = [];
+        for (const card of cards) {
+          if (out.length >= max) break;
+          const cmtEl =
+            card.querySelector<HTMLElement>('[componentkey^="CommentComponentReference"]') ||
+            card.querySelector<HTMLElement>('[componentkey^="replaceableComment_urn"]');
+          if (!cmtEl) continue;
+
+          const clines = (cmtEl.innerText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+          // comment body starts after the follow button (or after the time line).
+          let start = clines.findIndex((l) => FOLLOW.test(l));
+          if (start === -1) {
+            const t = clines.findIndex((l) => TIME.test(l));
+            start = t >= 0 ? t : 4;
+          }
+          const body: string[] = [];
+          for (let i = start + 1; i < clines.length; i++) {
+            const l = clines[i];
+            if (STOP.test(l) || /^\d+$/.test(l)) break;
+            body.push(l);
+          }
+          const comment = body.join(' ').trim();
+          if (!comment) continue;
+
+          const age = ((cmtEl.innerText ?? '').match(/\b(\d+\s*(?:min|h|d|sem|mes(?:es)?|años?|w|mo|yr))\b/i) ?? [])[1] ?? null;
+
+          // Context: the post they commented on (author + short snippet).
+          const cardLines = (card.innerText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+          const hdr = cardLines.findIndex((l) => /han comentado|comment(ed|ó)|han compartido/i.test(l));
+          const onPostBy = hdr >= 0 && cardLines[hdr + 1] ? cardLines[hdr + 1] : null;
+
+          const cs = card.querySelector<HTMLElement>('[componentkey^="commentsSectionContainer"]');
+          const csFirst = cs ? ((cs.innerText ?? '').split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? null) : null;
+          let postPart = cardLines;
+          if (csFirst) { const ci = cardLines.indexOf(csFirst); if (ci > 0) postPart = cardLines.slice(0, ci); }
+          const fb = postPart.findIndex((l) => FOLLOW.test(l));
+          const onPost = (fb >= 0 ? postPart.slice(fb + 1) : postPart.slice(5))
+            .join(' ').replace(/\s+/g, ' ').trim().slice(0, 220) || null;
+
+          out.push({ comment: comment.slice(0, 1000), onPostBy, onPost, age });
+        }
+        return out;
+      }, limit);
+
+      this.logger.log(`Comments for ${slug}: ${comments.length}`);
+      return comments;
     } finally {
       await page.close();
     }
