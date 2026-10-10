@@ -1,6 +1,6 @@
 {
   "name": "openlnkd",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Free, open-source, self-hosted LinkedIn automation API — session, job/people/company search, connections, outreach campaigns and inbox webhooks over a clean REST API. NestJS + Playwright.",
   "author": "Ismael Martín Saldaña",
   "license": "MIT",
