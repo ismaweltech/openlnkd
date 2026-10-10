@@ -20,6 +20,7 @@ Automate your LinkedIn job search, scrape profiles, run outreach campaigns and m
 | **Connections** | Send connection invites with optional note, send DMs to existing connections |
 | **Templates** | Create reusable message templates with `{variable}` placeholders |
 | **People** | Search LinkedIn profiles by title, company or connection degree, save to DB |
+| **Research** | Background jobs that run multi-profile studies: audience pain points, niche benchmarking, your own voice |
 | **Outreach** | Bulk messaging campaigns with human delays, recruiter finder, inbox reader |
 | **Webhooks** | Register HTTP endpoints to receive new inbox messages in real time |
 
@@ -120,6 +121,9 @@ PORT=3000
 # Browser behaviour
 HEADLESS=true    # set to false to watch the browser in action
 SLOW_MO=50       # ms delay between Playwright actions — increase if getting blocked
+
+# Research jobs
+# RESEARCH_DELAY_MS=2500   # pause between profile visits in /research jobs
 ```
 
 ### 3. Build and run
@@ -388,7 +392,7 @@ GET /people/jorgecalvomartin/profile?posts=8
 }
 ```
 
-One page visit per person. Uses the **median** on purpose, so one viral post doesn't make someone look consistently strong. Loop it over the results of a few `/people/search` queries, keep people with `lastOwnPostDays <= 30`, and rank by `medianEngagement` (or `medianEngagement / followers` for engagement rate) to find who actually performs in your niche.
+One page visit per person. Uses the **median** on purpose, so one viral post doesn't make someone look consistently strong. To do this for a whole niche without writing the loop yourself, use [`POST /research/benchmark`](#research).
 
 **Your own reach.** Each post item carries `days`, `reactions`, `comments`, `reposts` and `impressions`. LinkedIn only shows impressions to a post's author, so they're filled in only for your own profile:
 
@@ -396,6 +400,68 @@ One page visit per person. Uses the **median** on purpose, so one viral post doe
 GET /session/me                          # → { "slug": "your-slug", ... }
 GET /people/your-slug/profile?posts=20   # impressions per post = what actually reached people
 ```
+
+---
+
+### Research
+
+Studies that visit many profiles, packaged as **background jobs**. `POST` returns a job right away; poll `GET /research/jobs/:id` for progress, a log and — once `status` is `done` — the `result`. Jobs run one at a time (they share the browser), pause `RESEARCH_DELAY_MS` (default 2500) between profiles, skip a profile that fails instead of aborting, and are saved under `data/research/` so results survive a restart.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/research/audience` | What a target audience posts **and comments** about, segment by segment |
+| `POST` | `/research/benchmark` | Find the creators in a niche who actually perform, ranked by median engagement |
+| `POST` | `/research/voice` | What already works on **your own** profile, impressions included |
+| `GET` | `/research/jobs` | List jobs (without results) |
+| `GET` | `/research/jobs/:id` | Status, progress, log and result |
+| `DELETE` | `/research/jobs/:id` | Cancel a queued or running job |
+
+**Audience — what hurts your buyers.** For each segment: search, keep people whose headline contains one of `roleMatch`, then read their posts and the comments they leave on other people's posts. The comments are the useful part: posts are a shop window, comments are where people say what actually worries them.
+
+```bash
+POST /research/audience
+{
+  "segments": [
+    { "label": "logistics / CEO", "keywords": "CEO logística", "location": "España", "roleMatch": ["ceo", "founder", "director general"] },
+    { "label": "logistics / CFO", "keywords": "director financiero logística", "location": "España", "roleMatch": ["cfo", "financ"] }
+  ],
+  "perSegment": 5,   // profiles per segment
+  "posts": 5,        // posts per profile
+  "comments": 6      // comments per profile (0 to skip)
+}
+# → { "id": "dab20536", "status": "queued", ... }
+# result: { totals: { profiles, posts, comments }, segments: [{ label, profiles: [{ slug, headline, posts, comments }] }] }
+```
+
+**Benchmark — who to learn from.** Discovers candidates with people search (a profile found by several keywords ranks higher), filters headlines with the `headlineMatch` regex, adds any explicit `slugs`, visits each profile once and ranks. "Active" means an own post in the last `activeDays` and at least `minOwnPosts` own posts in the sample — plenty of big names haven't posted in months. Your own profile is added (`you: true`) so you can see where you stand.
+
+```bash
+POST /research/benchmark
+{
+  "keywords": ["agentes de IA", "automatización con IA", "IA generativa"],
+  "location": "España",
+  "headlineMatch": "\\bia\\b|inteligencia artificial|automatiz|agente|llm",
+  "slugs": ["jorgecalvomartin"],
+  "maxProfiles": 25, "posts": 8, "activeDays": 30, "minOwnPosts": 3
+}
+# result.ranking[]:
+# { "slug": "jorgecalvomartin", "followers": 14819, "medianEngagement": 49,
+#   "engagementRate": 0.33,          // median per 100 followers — compares small and big accounts
+#   "lastOwnPostDays": 0, "active": true, "bestPost": { "engagement": 86, "excerpt": "…" } }
+```
+
+**Voice — what already works for you.** Reads your own recent posts (impressions are only visible to the author) and summarises reach and style. Do this before copying anyone: the `closings` alone tell you how you sign off.
+
+```bash
+POST /research/voice
+{ "posts": 15 }
+# result: { followers, medianEngagement, engagementRate, medianImpressions, postsLast30d,
+#           topByImpressions[3], topByEngagement[3],
+#           style: { medianChars, medianLines, endsWithQuestion, questionNearEnd, withEmoji, withNumbers, withLink, closings[] },
+#           posts[] }
+```
+
+Ranking and medians are a starting point, not a verdict: read the top posts before modelling anyone, and don't reuse their hooks or metaphors — learn the structure, bring your own material.
 
 ---
 

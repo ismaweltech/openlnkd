@@ -9,6 +9,7 @@ import { JobsModule } from './jobs/jobs.module';
 import { LocationsModule } from './locations/locations.module';
 import { OutreachModule } from './outreach/outreach.module';
 import { PeopleModule } from './people/people.module';
+import { ResearchModule } from './research/research.module';
 import { SessionModule } from './session/session.module';
 import { TemplatesModule } from './templates/templates.module';
 import { UpdateModule } from './common/update/update.module';
@@ -27,6 +28,7 @@ import { WebhookModule } from './webhook/webhook.module';
     ConnectionsModule,
     TemplatesModule,
     PeopleModule,
+    ResearchModule,
     OutreachModule,
     WebhookModule,
     UpdateModule,
