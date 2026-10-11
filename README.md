@@ -394,6 +394,8 @@ GET /people/jorgecalvomartin/profile?posts=8
 
 One page visit per person. Uses the **median** on purpose, so one viral post doesn't make someone look consistently strong. To do this for a whole niche without writing the loop yourself, use [`POST /research/benchmark`](#research).
 
+**Attachment type.** Every post item also has `media` — `text`, `image`, `images` (several photos), `video` or `document` (PDF carousel) — and `contentCredentials: true` when LinkedIn shows its content-credentials badge on the image, which in practice means it was AI-generated. Benchmark rows summarise it as `mediaMix`.
+
 **Your own reach.** Each post item carries `days`, `reactions`, `comments`, `reposts` and `impressions`. LinkedIn only shows impressions to a post's author, so they're filled in only for your own profile:
 
 ```bash
@@ -450,12 +452,13 @@ POST /research/benchmark
 #   "lastOwnPostDays": 0, "active": true, "bestPost": { "engagement": 86, "excerpt": "…" } }
 ```
 
-**Voice — what already works for you.** Reads your own recent posts (impressions are only visible to the author) and summarises reach and style. Do this before copying anyone: the `closings` alone tell you how you sign off.
+**Voice — what already works for you.** Reads your own recent posts (impressions are only visible to the author) and summarises reach and style — including `byMedia`, which answers "should this post carry an image, a video, a carousel or nothing?" with your own numbers. Do this before copying anyone: the `closings` alone tell you how you sign off.
 
 ```bash
 POST /research/voice
 { "posts": 15 }
 # result: { followers, medianEngagement, engagementRate, medianImpressions, postsLast30d,
+#           byMedia: { image: {...}, images: {...}, video: {...}, 'image (AI)': {...} },  // posts, medianImpressions, medianEngagement per format
 #           topByImpressions[3], topByEngagement[3],
 #           style: { medianChars, medianLines, endsWithQuestion, questionNearEnd, withEmoji, withNumbers, withLink, closings[] },
 #           posts[] }

@@ -314,6 +314,7 @@ export class ResearchService implements OnModuleInit {
       ownRatio: m.ownRatio,
       active: m.lastOwnPostDays !== null && m.lastOwnPostDays <= activeDays && m.ownPosts >= minOwnPosts,
       searchHits: hits,
+      mediaMix: own.reduce<Record<string, number>>((m, x) => ((m[x.media] = (m[x.media] ?? 0) + 1), m), {}),
       bestPost: best ? { engagement: this.engagement(best), age: best.age, excerpt: best.body.slice(0, 280) } : null,
     };
   }
@@ -333,6 +334,7 @@ export class ResearchService implements OnModuleInit {
     const imps = own.map((x) => x.impressions).filter((n): n is number => n !== null);
     const summary = (x: ActivityPost) => ({
       age: x.age,
+      media: x.media,
       impressions: x.impressions,
       engagement: this.engagement(x),
       excerpt: x.body.slice(0, 200),
@@ -351,6 +353,8 @@ export class ResearchService implements OnModuleInit {
         : null,
       medianImpressions: this.median(imps),
       postsLast30d: prof.metrics.ownPostsLast30d,
+      /** how each attachment type performs for you — the answer to "image, carousel or nothing?" */
+      byMedia: this.byMedia(own),
       topByImpressions: [...own].filter((x) => x.impressions !== null)
         .sort((a, b) => b.impressions! - a.impressions!).slice(0, 3).map(summary),
       topByEngagement: [...own].sort((a, b) => this.engagement(b) - this.engagement(a)).slice(0, 3).map(summary),
@@ -372,6 +376,18 @@ export class ResearchService implements OnModuleInit {
   }
 
   // ── helpers ───────────────────────────────────────────────────────────
+
+  private byMedia(posts: ActivityPost[]) {
+    const groups: Record<string, ActivityPost[]> = {};
+    for (const x of posts) (groups[x.contentCredentials ? `${x.media} (AI)` : x.media] ??= []).push(x);
+    return Object.fromEntries(
+      Object.entries(groups).map(([k, xs]) => [k, {
+        posts: xs.length,
+        medianImpressions: this.median(xs.map((x) => x.impressions).filter((n): n is number => n !== null)),
+        medianEngagement: this.median(xs.map((x) => this.engagement(x))),
+      }]),
+    );
+  }
 
   private engagement(x: ActivityPost) {
     return (x.reactions ?? 0) + (x.comments ?? 0);

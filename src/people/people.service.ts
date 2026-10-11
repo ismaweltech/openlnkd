@@ -46,6 +46,10 @@ export interface ActivityPost {
    * is filled in only when scraping your own profile — null for anyone else.
    */
   impressions: number | null;
+  /** attachment: none, one photo, several photos, video, or PDF document (carousel) */
+  media: 'text' | 'image' | 'images' | 'video' | 'document';
+  /** image carries LinkedIn's content-credentials (C2PA) badge — usually AI-generated */
+  contentCredentials: boolean;
 }
 
 export interface ProfileSummary {
@@ -541,6 +545,19 @@ export class PeopleService {
           );
           const body = bodyLines.join('\n').trim();
 
+          // Attachment type. Photos render as large <img alt="Ver imagen|View image">,
+          // videos as a <video> element (whose poster img has no alt), documents
+          // (PDF carousels) carry a "document" aria-label.
+          const labels = Array.from(card.querySelectorAll('[aria-label]')).map((e) => e.getAttribute('aria-label') ?? '');
+          const photos = Array.from(card.querySelectorAll('img')).filter(
+            (i) => i.getBoundingClientRect().width >= 200 && /ver imagen|view image|image/i.test(i.getAttribute('alt') ?? ''),
+          ).length;
+          const media = card.querySelector('video') ? 'video'
+            : labels.some((l) => /documento|document|carrusel|carousel/i.test(l)) ? 'document'
+            : photos > 1 ? 'images' : photos === 1 ? 'image' : 'text';
+          // C2PA "content credentials" badge — LinkedIn shows it on AI-generated images.
+          const contentCredentials = labels.some((l) => /credenciales|content credentials/i.test(l));
+
           out.push({
             type: isRepost ? 'repost' : 'post',
             text: full.slice(0, 3000),
@@ -550,6 +567,8 @@ export class PeopleService {
             comments: comments ? parseCount(comments) : null,
             reposts: reposts ? parseCount(reposts) : null,
             impressions: impressions ? parseCount(impressions) : null,
+            media,
+            contentCredentials,
           });
         }
         return { posts: out, followers, name, headline };
