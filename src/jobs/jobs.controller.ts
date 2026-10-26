@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JobsService } from './jobs.service';
 import { JobSearchDto } from './dto/job-search.dto';
@@ -45,25 +45,30 @@ export class JobsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a single job by ID' })
-  findOne(@Param('id') id: string) {
-    return this.jobs.findOne(id);
+  async findOne(@Param('id') id: string) {
+    return this.found(id, await this.jobs.findOne(id));
   }
 
   @Get(':id/description')
   @ApiOperation({ summary: 'Get full job description (scrapes if not cached)' })
   async getDescription(@Param('id') id: string) {
-    return this.jobs.getDescription(id);
+    return this.found(id, await this.jobs.getDescription(id));
   }
 
   @Patch(':id/applied')
-  @ApiOperation({ summary: 'Mark a job as applied' })
-  markApplied(@Param('id') id: string) {
-    return this.jobs.markApplied(id);
+  @ApiOperation({ summary: 'Mark a job as applied — body { "applied": false } to undo' })
+  async markApplied(@Param('id') id: string, @Body() body: { applied?: boolean } = {}) {
+    return this.found(id, await this.jobs.markApplied(id, body?.applied !== false));
   }
 
   @Patch(':id/saved')
-  @ApiOperation({ summary: 'Mark a job as saved' })
-  markSaved(@Param('id') id: string) {
-    return this.jobs.markSaved(id);
+  @ApiOperation({ summary: 'Mark a job as saved — body { "saved": false } to undo' })
+  async markSaved(@Param('id') id: string, @Body() body: { saved?: boolean } = {}) {
+    return this.found(id, await this.jobs.markSaved(id, body?.saved !== false));
+  }
+
+  private found<T>(id: string, job: T | null): T {
+    if (!job) throw new NotFoundException(`Job ${id} not found in DB. Run a search first.`);
+    return job;
   }
 }

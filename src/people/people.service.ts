@@ -81,6 +81,8 @@ export interface ActivityComment {
   onPost: string | null;
   /** relative age as LinkedIn shows it */
   age: string | null;
+  /** true when it's a reply in the person's own post thread (less candid than commenting on others) */
+  onOwnPost: boolean;
 }
 
 @Injectable()
@@ -495,7 +497,7 @@ export class PeopleService {
         const out: any[] = [];
         for (const card of cards) {
           if (out.length >= max) break;
-          const full = (card.innerText ?? '').replace(/\r/g, '').trim();
+          const full = (card.innerText ?? '').replace(/\r|\u200b/g, '').trim();
           if (!full) continue;
           const lines = full.split('\n').map((l) => l.trim()).filter(Boolean);
 
@@ -503,8 +505,6 @@ export class PeopleService {
           const REPOST = /\b(ha|han|he|hemos)\s+compartido esto|comparti[oó]\b|reposted this|shared this/i;
           const isRepost = REPOST.test(full.slice(0, 200));
 
-          // Age token ("4 d", "2 sem", "1 mes", "3 h")
-          const age = (full.match(/\b(\d+\s*(?:min|h|d|sem|semanas?|mes(?:es)?|años?|yr|w|mo))\b/i) ?? [])[1] ?? null;
 
           // Reactions come in two shapes: "83 reacciones" on most cards, or — when
           // people you know reacted (always the case on your own posts) — "Ana
@@ -522,8 +522,19 @@ export class PeopleService {
               if (nm) reactionsN = (nm[1] ?? nm[2]).split(/,|\s+y\s+|\s+and\s+/).length;
             }
           }
-          const comments = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:comentarios|comments)/i) ?? [])[1];
-          const reposts = (full.match(/([\d.]+)\s*(?:vez|veces)\s+compartid[oa]|([\d.]+)\s*reposts?\b/i) ?? []).slice(1).find(Boolean);
+          let comments: string | number | null | undefined = (full.match(/([\d.]+(?:\s*mil)?)\s*(?:comentarios|comments)/i) ?? [])[1];
+          let reposts: string | number | null | undefined = (full.match(/([\d.]+)\s*(?:vez|veces)\s+compartid[oa]|([\d.]+)\s*reposts?\b/i) ?? []).slice(1).find(Boolean);
+
+          // Since Oct 2026 the counts are bare numbers inside the action buttons
+          // (reaction / Comentar / Compartir), identified only by aria-label.
+          for (const btn of Array.from(card.querySelectorAll<HTMLElement>('button[aria-label]'))) {
+            const n = (btn.innerText ?? '').trim();
+            if (!/^[\d.,]+(\s*mil|k)?$/i.test(n)) continue;
+            const label = btn.getAttribute('aria-label') ?? '';
+            if (/reacci|reaction|recomendar|like/i.test(label)) reactionsN ??= parseCount(n);
+            else if (/^(comentar|comment)/i.test(label)) comments ??= n;
+            else if (/^(compartir|repost|share|volver a publicar)/i.test(label)) reposts ??= n;
+          }
           // Impressions only render on the viewer's own posts ("3,444 impresiones").
           const impressions = (full.match(/([\d.,]+(?:\s*mil)?)\s*(?:impresiones|impressions)/i) ?? [])[1];
 
@@ -531,10 +542,14 @@ export class PeopleService {
           // headline, date, "Seguir", translation + engagement/CTA footer) and keep
           // the actual post text. We drop everything up to the date line, which
           // sits right before the body on LinkedIn update cards.
-          const dateIdx = lines.findIndex((l) => /^\d+\s*(?:min|h|d|sem|mes|año|w|mo|yr)/i.test(l));
+          // Date line: relative ("4 d", "2 sem", "3 h") on recent posts, absolute
+          // ("24 de sept.", "Sep 24", "3 de mar. de 2025") on older ones.
+          const DATE = /^(\d+\s*(?:min|h|d|sem|semanas?|mes(?:es)?|años?|yr|w|mo)\b|\d{1,2}\s+(?:de\s+)?[a-zé]{3,5}\.?(?:\s+(?:de\s+)?\d{4})?$|[A-Z][a-z]{2}\s+\d{1,2}(?:,\s*\d{4})?$)/i;
+          const dateIdx = lines.findIndex((l) => DATE.test(l));
+          const age = dateIdx >= 0 ? lines[dateIdx].replace(/\s*•.*$/, '').trim() : null;
           const afterDate = dateIdx >= 0 ? lines.slice(dateIdx + 1) : lines;
           const bodyLines = afterDate.filter((l) =>
-            !/^(publicaci[oó]n en el feed|seguir|follow|ver traducci[oó]n|mostrar traducci[oó]n|see translation|\.{3}\s*más|…\s*más|más|ver más|see more)$/i.test(l) &&
+            !/^(publicaci[oó]n en el feed|seguir|follow|conectar|connect|ver traducci[oó]n|mostrar traducci[oó]n|see translation|\.{3}\s*más|…\s*más|más|ver más|see more)$/i.test(l) &&
             !REPOST.test(l) &&
             !/^(ir al sitio web|visit|visitar)/i.test(l) &&
             !/^([\d.,]+(?:\s*mil)?\s*(reacciones|reactions|comentarios|comments|veces compartido|reposts?|impresiones|impressions))$/i.test(l) &&
@@ -543,6 +558,8 @@ export class PeopleService {
             !/^[\d.]+\s*(vez|veces)\s+compartid[oa]$/i.test(l) &&
             !/^(recomendar|comentar|compartir|enviar|like|comment|share|send|me gusta)$/i.test(l),
           );
+          // The action-button counts render as bare numbers right after the body.
+          while (bodyLines.length && /^[\d.,]+(\s*mil|k)?$/i.test(bodyLines[bodyLines.length - 1])) bodyLines.pop();
           const body = bodyLines.join('\n').trim();
 
           // Attachment type. Photos render as large <img alt="Ver imagen|View image">,
@@ -564,8 +581,8 @@ export class PeopleService {
             body: body.slice(0, 3000),
             age,
             reactions: reactionsN,
-            comments: comments ? parseCount(comments) : null,
-            reposts: reposts ? parseCount(reposts) : null,
+            comments: comments ? parseCount(String(comments)) : null,
+            reposts: reposts ? parseCount(String(reposts)) : null,
             impressions: impressions ? parseCount(impressions) : null,
             media,
             contentCredentials,
@@ -584,6 +601,8 @@ export class PeopleService {
   /** "4 d" → 4, "2 sem" → 14, "3 meses" → 90, "1 año" → 365, "5 h" → 0. */
   private ageToDays(age: string | null): number | null {
     if (!age) return null;
+    const abs = this.absoluteDateToDays(age);
+    if (abs !== null) return abs;
     const m = age.match(/(\d+)\s*(min|h|d|sem|semanas?|mes(?:es)?|años?|w|mo|yr)/i);
     if (!m) return null;
     const n = parseInt(m[1], 10);
@@ -594,6 +613,25 @@ export class PeopleService {
     if (u.startsWith('mes') || u === 'mo') return n * 30;
     if (u.startsWith('añ') || u === 'yr') return n * 365;
     return null;
+  }
+
+  /** "24 de sept.", "3 de mar. de 2025", "Sep 24", "Mar 3, 2025" → days ago */
+  private absoluteDateToDays(age: string): number | null {
+    const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    const EN = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const es = age.match(/^(\d{1,2})\s+(?:de\s+)?([a-zé]{3,5})\.?(?:\s+(?:de\s+)?(\d{4}))?$/i);
+    const en = age.match(/^([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?$/i);
+    let day: number, month: number, year: number | null;
+    if (es) {
+      day = +es[1]; month = MONTHS.indexOf(es[2].toLowerCase().slice(0, 3)); year = es[3] ? +es[3] : null;
+    } else if (en) {
+      day = +en[2]; month = EN.indexOf(en[1].toLowerCase()); year = en[3] ? +en[3] : null;
+    } else return null;
+    if (month < 0) return null;
+    const now = new Date();
+    let d = new Date(year ?? now.getFullYear(), month, day);
+    if (year === null && d > now) d = new Date(now.getFullYear() - 1, month, day); // no year shown = last 12 months
+    return Math.max(0, Math.floor((now.getTime() - d.getTime()) / 86_400_000));
   }
 
   /**
@@ -636,9 +674,17 @@ export class PeopleService {
         const out: any[] = [];
         for (const card of cards) {
           if (out.length >= max) break;
-          const cmtEl =
-            card.querySelector<HTMLElement>('[componentkey^="CommentComponentReference"]') ||
-            card.querySelector<HTMLElement>('[componentkey^="replaceableComment_urn"]');
+          // The card can show other people's comments too (e.g. when the person
+          // replied on a thread), so pick the comment signed by the person named
+          // in the card header ("<Name> han comentado" / "<Name> commented").
+          const header = (card.innerText ?? '').split('\n').map((l) => l.trim()).find((l) => /\s(ha|han) comentado|\scommented/i.test(l));
+          const who = header ? header.replace(/\s+(ha|han) comentado.*$|\s+commented.*$/i, '').trim() : null;
+          let candidates = Array.from(card.querySelectorAll<HTMLElement>('[componentkey^="CommentComponentReference"]'));
+          if (!candidates.length) candidates = Array.from(card.querySelectorAll<HTMLElement>('[componentkey^="replaceableComment_urn"]'));
+          const byWho = who
+            ? candidates.filter((el) => (el.innerText ?? '').split('\n').slice(0, 4).some((l) => l.trim().startsWith(who)))
+            : candidates;
+          const cmtEl = byWho[byWho.length - 1];
           if (!cmtEl) continue;
 
           const clines = (cmtEl.innerText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -657,7 +703,8 @@ export class PeopleService {
           const comment = body.join(' ').trim();
           if (!comment) continue;
 
-          const age = ((cmtEl.innerText ?? '').match(/\b(\d+\s*(?:min|h|d|sem|mes(?:es)?|años?|w|mo|yr))\b/i) ?? [])[1] ?? null;
+          const timeLine = clines.find((l) => TIME.test(l));
+          const age = timeLine ? timeLine.replace(/^\(?(editado|edited)\)?\s*/i, '').trim() : null;
 
           // Context: the post they commented on (author + short snippet).
           const cardLines = (card.innerText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -672,7 +719,7 @@ export class PeopleService {
           const onPost = (fb >= 0 ? postPart.slice(fb + 1) : postPart.slice(5))
             .join(' ').replace(/\s+/g, ' ').trim().slice(0, 220) || null;
 
-          out.push({ comment: comment.slice(0, 1000), onPostBy, onPost, age });
+          out.push({ comment: comment.slice(0, 1000), onPostBy, onPost, age, onOwnPost: !!who && onPostBy === who });
         }
         return out;
       }, limit);

@@ -276,13 +276,13 @@ export class JobsService {
     return row ? this.rowToJob(row) : null;
   }
 
-  async markApplied(id: string): Promise<Job | null> {
-    await this.db.execute('UPDATE jobs SET applied = 1 WHERE id = ?', [id]);
+  async markApplied(id: string, applied = true): Promise<Job | null> {
+    await this.db.execute('UPDATE jobs SET applied = ? WHERE id = ?', [applied ? 1 : 0, id]);
     return this.findOne(id);
   }
 
-  async markSaved(id: string): Promise<Job | null> {
-    await this.db.execute('UPDATE jobs SET saved = 1 WHERE id = ?', [id]);
+  async markSaved(id: string, saved = true): Promise<Job | null> {
+    await this.db.execute('UPDATE jobs SET saved = ? WHERE id = ?', [saved ? 1 : 0, id]);
     return this.findOne(id);
   }
 

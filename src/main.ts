@@ -12,6 +12,8 @@ dotenv.config({ path: join(__dirname, '..', '.env') });
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // On SIGTERM/SIGINT: run onModuleDestroy (closes Chromium), then exit.
+  app.enableShutdownHooks();
 
   // Validate request bodies against DTO classes: missing/invalid fields → 400
   // (instead of crashing downstream with a 500). transform hydrates DTO classes.
@@ -28,7 +30,7 @@ async function bootstrap() {
   const config = new DocumentBuilder()
     .setTitle('OpenLnkd')
     .setDescription('Open Source LinkedIn API Gateway')
-    .setVersion('0.6.0')
+    .setVersion('0.7.0')
     .build();
 
   SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));

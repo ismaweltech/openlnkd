@@ -72,6 +72,12 @@ export class BrowserService implements OnModuleDestroy {
     this.browser = await chromium.launch({
       headless,
       slowMo: Number(process.env.SLOW_MO ?? 50),
+      // Playwright's own signal handlers keep the process alive after SIGTERM
+      // (a listener replaces Node's default exit), so `docker stop` and the dev
+      // watcher hang. Nest's shutdown hooks close the browser instead (main.ts).
+      handleSIGTERM: false,
+      handleSIGINT: false,
+      handleSIGHUP: false,
       args: [
         '--no-sandbox',
         '--disable-blink-features=AutomationControlled',

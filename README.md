@@ -177,8 +177,8 @@ curl -X POST http://localhost:3000/session/login \
 | `GET` | `/jobs` | List saved jobs with optional filters |
 | `GET` | `/jobs/:id` | Get a single saved job |
 | `GET` | `/jobs/:id/description` | Get full job description (scrapes if not cached) |
-| `PATCH` | `/jobs/:id/applied` | Mark job as applied |
-| `PATCH` | `/jobs/:id/saved` | Mark job as saved/bookmarked |
+| `PATCH` | `/jobs/:id/applied` | Mark job as applied (`{ "applied": false }` to undo) |
+| `PATCH` | `/jobs/:id/saved` | Mark job as saved/bookmarked (`{ "saved": false }` to undo) |
 
 **Search:**
 
@@ -370,7 +370,7 @@ Combine it with `/people/search` or `/companies/:id/people`: find the right peop
 GET /people/jordi-romero/comments?limit=10
 ```
 
-People are far more honest commenting on others' posts than publishing their own. Each item returns their `comment`, the `onPostBy` author they replied to, an `onPost` snippet for context, and `age`. This is the strongest source for a persona's real opinions and frustrations.
+People are far more honest commenting on others' posts than publishing their own. Each item returns their `comment`, the `onPostBy` author they replied to, an `onPost` snippet for context, `age`, and `onOwnPost` — `true` when it's a reply inside their own post's thread. Filter those out when you want the candid signal: comments on other people's posts. This is the strongest source for a persona's real opinions and frustrations.
 
 **Benchmark people — competitors, references, creators you want to learn from:**
 
