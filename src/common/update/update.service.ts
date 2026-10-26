@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 
 const GITHUB_REPO = 'ismaweltech/openlnkd';
 const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
@@ -11,7 +12,8 @@ export interface VersionInfo {
 }
 
 /**
- * Checks GitHub for a newer published release on startup and via GET /version.
+ * Checks GitHub for a newer published release on startup, every 12 hours (so a
+ * server left running for days still hears about fixes) and via GET /version.
  *
  * Privacy: this only performs a public, unauthenticated GET to GitHub's
  * releases API. It sends NO information about the user, the machine, or usage —
@@ -26,6 +28,8 @@ export class UpdateService implements OnApplicationBootstrap {
   private readonly current: string = this.readCurrentVersion();
   private readonly enabled: boolean = process.env.UPDATE_CHECK !== 'false';
   private latest: string | null = null;
+  private checkedAt = 0;
+  private warnedFor: string | null = null;
 
   async onApplicationBootstrap() {
     if (!this.enabled) return;
@@ -35,7 +39,7 @@ export class UpdateService implements OnApplicationBootstrap {
 
   /** Returns cached/fresh version info for the /version endpoint. */
   async getVersionInfo(): Promise<VersionInfo> {
-    if (this.enabled && this.latest === null) {
+    if (this.enabled && (this.latest === null || Date.now() - this.checkedAt > 6 * 3600_000)) {
       await this.check();
     }
     return {
@@ -44,6 +48,11 @@ export class UpdateService implements OnApplicationBootstrap {
       upToDate: this.latest ? !this.isNewer(this.latest, this.current) : null,
       releaseUrl: `https://github.com/${GITHUB_REPO}/releases`,
     };
+  }
+
+  @Interval(12 * 3600_000)
+  async periodicCheck() {
+    if (this.enabled) await this.check();
   }
 
   private async check(): Promise<void> {
@@ -61,8 +70,10 @@ export class UpdateService implements OnApplicationBootstrap {
       const tag: string = (data?.tag_name ?? '').replace(/^v/, '');
       if (!tag) return;
       this.latest = tag;
+      this.checkedAt = Date.now();
 
-      if (this.isNewer(tag, this.current)) {
+      if (this.isNewer(tag, this.current) && this.warnedFor !== tag) {
+        this.warnedFor = tag;
         this.logger.warn(
           `Update available: v${tag} (you're on v${this.current}). ` +
           `LinkedIn changes often — update with: git pull && docker compose up -d --build`,
