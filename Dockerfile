@@ -34,5 +34,8 @@ EXPOSE 3000
 # HEADLESS must stay true inside a container (no display server)
 ENV HEADLESS=true
 ENV DATABASE_PATH=/app/data/openlnkd.db
+# Listen on all interfaces inside the container; publish with -p 127.0.0.1:3000:3000
+ENV HOST=0.0.0.0
+ENV OPENLNKD_CONTAINER=1
 
 CMD ["node", "dist/main.js"]

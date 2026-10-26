@@ -51,6 +51,10 @@ Session cookies are stored in the local database after each login. On restart, O
 
 ---
 
+> **Security: local only.** The API has no authentication and acts as *your* LinkedIn account, so it only accepts connections from your own machine (`HOST=127.0.0.1`, the default; Docker publishes the port on `127.0.0.1` too). Don't set `HOST=0.0.0.0` or publish the port on your network unless you put your own authentication in front of it — anyone on the same Wi-Fi could otherwise use your account.
+
+---
+
 ## Stack
 
 | Layer | Technology |
@@ -119,6 +123,7 @@ DATABASE_PATH=./data/openlnkd.db
 
 # Server
 PORT=3000
+HOST=127.0.0.1   # local only — the API has no auth and acts as your LinkedIn account
 
 # Browser behaviour
 HEADLESS=true    # set to false to watch the browser in action

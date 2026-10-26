@@ -6,13 +6,21 @@ services:
     # image: ghcr.io/ismaweltech/openlnkd:latest
     container_name: openlnkd
     ports:
-      - "${PORT:-3000}:3000"
+      # Published on 127.0.0.1 only: the API has no auth and acts as your
+      # LinkedIn account, so it must not be reachable from your network.
+      - "127.0.0.1:${PORT:-3000}:3000"
     env_file:
       - .env
     environment:
       # Container-safe overrides (win over .env values)
       - HEADLESS=true
       - DATABASE_PATH=/app/data/openlnkd.db
+      # Must listen on all interfaces *inside* the container so Docker can
+      # forward the port; exposure is limited by the ports mapping above.
+      - HOST=0.0.0.0
+      # The app always listens on 3000 inside the container; PORT in .env only
+      # picks the host-side port in the mapping above.
+      - PORT=3000
     volumes:
       # Persists the SQLite DB (session cookies included) across restarts
       - openlnkd-data:/app/data
