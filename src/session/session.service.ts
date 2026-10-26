@@ -27,6 +27,9 @@ export class SessionService {
     if (!_email || !_password) {
       throw new UnauthorizedException('LinkedIn credentials not configured');
     }
+    if (_email === 'your@email.com' || _password === 'yourpassword') {
+      throw new UnauthorizedException('Put your LinkedIn email and password in .env (it still has the example values), then restart.');
+    }
 
     const restored = await this.tryRestoreSession();
     if (restored) {
@@ -58,10 +61,34 @@ export class SessionService {
       await this.humanDelay(500, 900);
       await page.keyboard.press('Enter');
 
-      await page.waitForURL(/linkedin\.com\/(feed|check\/manage-account)/, { timeout: 20000 });
+      const landed = await page
+        .waitForURL(/linkedin\.com\/(feed|check\/manage-account|checkpoint)/, { timeout: 30000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!landed) {
+        return { ok: false, message: 'Login did not complete. Check LINKEDIN_EMAIL and LINKEDIN_PASSWORD in .env.' };
+      }
 
-      if (page.url().includes('check/manage-account')) {
-        return { ok: false, message: 'LinkedIn requires verification. Check your email/phone.' };
+      // First login from a new machine usually hits a checkpoint (email/app code).
+      // With a visible browser the user can clear it; headless they can't.
+      if (/checkpoint|check\/manage-account/.test(page.url())) {
+        if (process.env.HEADLESS !== 'false') {
+          return {
+            ok: false,
+            message:
+              'LinkedIn asks for a verification (code by email or approval in the app). ' +
+              'Set HEADLESS=false in .env, restart OpenLnkd and call POST /session/login again: ' +
+              'a browser window opens where you complete it. Afterwards you can go back to HEADLESS=true.',
+          };
+        }
+        this.logger.warn('LinkedIn verification required — complete it in the browser window (waiting up to 5 min)');
+        const cleared = await page
+          .waitForURL(/linkedin\.com\/feed/, { timeout: 5 * 60_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (!cleared) {
+          return { ok: false, message: 'Verification was not completed within 5 minutes. Call POST /session/login again.' };
+        }
       }
 
       await this.saveSession();

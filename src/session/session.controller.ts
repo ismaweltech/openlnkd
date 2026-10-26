@@ -9,8 +9,9 @@ export class SessionController {
 
   @Post('login')
   @ApiOperation({ summary: 'Login with LinkedIn credentials' })
-  async login(@Body() body: { email?: string; password?: string }) {
-    return this.session.login(body.email, body.password);
+  async login(@Body() body?: { email?: string; password?: string }) {
+    // No body → use LINKEDIN_EMAIL / LINKEDIN_PASSWORD from .env
+    return this.session.login(body?.email, body?.password);
   }
 
   @Get('status')

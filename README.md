@@ -79,6 +79,8 @@ docker compose up -d
 
 That's it: API on `http://localhost:3000`, Swagger on `/docs`. The SQLite database (including your session cookies) persists in a named volume across restarts.
 
+**First login from a new machine.** LinkedIn usually asks for a verification code the first time. Set `HEADLESS=false` in `.env` (manual install), call `POST /session/login` and complete the check in the browser window that opens — the request waits up to 5 minutes. After that the session is saved and you can go back to `HEADLESS=true`. With `HEADLESS=true` the login returns a message telling you to do exactly this.
+
 To update after a new release:
 
 ```bash
