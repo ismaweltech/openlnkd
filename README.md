@@ -150,6 +150,20 @@ npm run start:dev
 
 ---
 
+## Health check
+
+LinkedIn changes its markup every few weeks, and a parser can break silently (empty reactions, a button label inside a name). With OpenLnkd running, check every parser against the live site:
+
+```bash
+npm run smoke
+```
+
+It calls the read-only endpoints and validates the **content** of each answer, not just the status code, then prints `OK`/`FAIL` per area with the reason. It never sends messages, invites or campaigns (it only creates and deletes a throwaway template and webhook in your local DB). Exit code 1 if anything fails. Options: `OPENLNKD_URL`, `SMOKE_LOCATION` (default `Madrid`).
+
+If something fails, update first (`git pull`) — the fix may already be out — and otherwise open an issue with the output.
+
+---
+
 ## API Reference
 
 ### Session

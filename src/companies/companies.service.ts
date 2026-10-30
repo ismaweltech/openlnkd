@@ -315,15 +315,19 @@ export class CompaniesService {
     const name = lines[0] ?? '';
     if (!name) return null;
 
-    // Lines after name: typically industry • size • location
-    const meta = lines.slice(1).filter((l) => l.length > 1);
+    // Card layout (Oct 2026): name, industry, location, description…, and a last
+    // social-proof line ending in "N seguidores" ("Rafael sigue esta página · 555
+    // seguidores"). Search cards no longer show the employee range — filter by size
+    // with companySize instead.
+    const followerIdx = lines.findIndex((l) => /\b(seguidores|followers)\b/i.test(l));
+    const followerLine = followerIdx >= 0 ? lines[followerIdx] : null;
+    const follower_count =
+      followerLine?.match(/([\d.,]+(?:\s*(?:mil|k))?)\s*(?:seguidores|followers)/i)?.[1]?.trim() ?? null;
+    const meta = (followerIdx >= 0 ? lines.slice(1, followerIdx) : lines.slice(1)).filter((l) => l.length > 1);
     const industry = meta[0] ?? null;
-    const sizeLine = meta.find((l) => /\d/.test(l) || l.includes('empleados') || l.includes('employees')) ?? null;
-    const location = meta.find((l) => l !== industry && l !== sizeLine && l.length > 2) ?? null;
-
-    // Follower count often appears as "X seguidores" or "X followers"
-    const followerLine = lines.find((l) => /seguidores|followers/i.test(l));
-    const follower_count = followerLine?.match(/[\d,\.]+/)?.[0] ?? null;
+    const location = meta[1] ?? null;
+    const sizeLine = meta.find((l) => /empleados|employees/i.test(l)) ?? null;
+    const description = meta.slice(2).filter((l) => l !== sizeLine).join(' ').replace(/\s+/g, ' ').trim();
 
     return {
       id: slug,
@@ -332,7 +336,7 @@ export class CompaniesService {
       url: `https://www.linkedin.com/company/${slug}`,
       industry,
       size: sizeLine,
-      headline: meta[meta.length - 1] !== location ? meta[meta.length - 1] : null,
+      headline: description ? description.slice(0, 300) : null,
       location,
       follower_count,
       company_type: null,
@@ -391,7 +395,17 @@ export class CompaniesService {
 
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      await this.delay(3000, 4000);
+      // Results render client-side and their timing varies a lot (2–10 s): wait
+      // until either profile links or the "no results" message are on the page.
+      await page
+        .waitForFunction(
+          () => !!document.querySelector('main a[href*="/in/"], a[href*="/in/"]') ||
+            /no se han encontrado resultados|no results found/i.test(document.body?.innerText ?? ''),
+          null,
+          { timeout: 15000 },
+        )
+        .catch(() => null);
+      await this.delay(800, 1300);
 
       // LinkedIn new UI: card content lives inside the <a href="/in/..."> element.
       // Paginate via aria-label="Página N" numbered buttons (no "Next" button exists).
@@ -579,7 +593,7 @@ export class CompaniesService {
       .filter((l) => l && !SKIP_LINE.test(l));
 
     // Strip inline degree indicator from name ("Ana Díaz • 2º" → "Ana Díaz")
-    const name = (lines[0] ?? '').replace(/\s*•\s*\d+[ºa-z°]*/i, '').trim();
+    const name = (lines[0] ?? '').replace(/\s*•\s*\d+[ºa-z°]*\+?/i, '').trim();
     if (!name || /linkedin member|miembro de linkedin/i.test(name)) return null;
 
     return {

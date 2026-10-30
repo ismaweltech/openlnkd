@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../common/database/database.service';
 
 export interface Template {
@@ -22,6 +22,8 @@ export class TemplatesService {
 
   async create(dto: CreateTemplateDto): Promise<Template> {
     const vars = this.extractVariables(dto.body);
+    const existing = await this.db.queryOne<any>('SELECT id FROM templates WHERE name = ?', [dto.name]);
+    if (existing) throw new ConflictException(`A template named "${dto.name}" already exists (id ${existing.id})`);
     const result = await this.db.execute(
       `INSERT INTO templates (name, subject, body, variables)
        VALUES (?, ?, ?, ?)`,

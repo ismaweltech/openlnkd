@@ -30,7 +30,7 @@ async function bootstrap() {
   const config = new DocumentBuilder()
     .setTitle('OpenLnkd')
     .setDescription('Open Source LinkedIn API Gateway')
-    .setVersion('0.7.3')
+    .setVersion('0.7.4')
     .build();
 
   SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));

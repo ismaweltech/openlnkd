@@ -4,6 +4,7 @@ import { DatabaseService } from '../common/database/database.service';
 import { SessionService } from '../session/session.service';
 import { VoyagerService } from '../common/voyager/voyager.service';
 import { resolveGeoUrn } from '../common/location-urns';
+import { LocationsService } from '../locations/locations.service';
 
 export interface Person {
   id: string;
@@ -94,11 +95,16 @@ export class PeopleService {
     private readonly db: DatabaseService,
     private readonly session: SessionService,
     private readonly voyager: VoyagerService,
+    private readonly locations: LocationsService,
   ) {}
 
   async search(params: PeopleSearchParams): Promise<Person[]> {
     await this.session.ensureAuthenticated();
     const limit = params.limit ?? 25;
+    if (!params.geoId && params.location) {
+      const geoId = await this.resolvePeopleGeo(params.location);
+      if (geoId) params = { ...params, geoId };
+    }
 
     // ── Primary: Voyager search/blended API (no browser) ─────────────────
     const apiPeople = await this.searchViaApi(params, limit);
@@ -222,7 +228,17 @@ export class PeopleService {
 
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      await this.delay(2000, 3000);
+      // Results render client-side and their timing varies a lot (2–10 s): wait
+      // until either profile links or the "no results" message are on the page.
+      await page
+        .waitForFunction(
+          () => !!document.querySelector('main a[href*="/in/"], a[href*="/in/"]') ||
+            /no se han encontrado resultados|no results found/i.test(document.body?.innerText ?? ''),
+          null,
+          { timeout: 15000 },
+        )
+        .catch(() => null);
+      await this.delay(800, 1300);
 
       // LinkedIn new UI: card content lives inside the <a href="/in/..."> element.
       // Paginate via aria-label="Página N" numbered buttons (no "Next" button exists).
@@ -302,6 +318,39 @@ export class PeopleService {
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
+  /**
+   * People search only accepts metro/region geos: since Oct 2026 a city geo
+   * ("Sevilla, Andalucía, España") returns "no results" while the metro one
+   * ("Sevilla y alrededores") works. Job search still takes the city, so this is
+   * people-specific. Countries and regions resolve through the static map.
+   */
+  private async resolvePeopleGeo(location: string): Promise<string | undefined> {
+    const norm = (x: string) => x.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const q = norm(location);
+    try {
+      const results = await this.locations.typeahead(location);
+      const metro = results.find((r) => {
+        const l = norm(r.label);
+        return [`${q} y alrededores`, `greater ${q} area`, `${q} metropolitan area`, `area metropolitana de ${q}`].includes(l);
+      });
+      if (metro) {
+        this.logger.debug(`People geo "${location}" → metro ${metro.label} (${metro.id})`);
+        return metro.id;
+      }
+      // Regions ("Andalucía" → "Andalucía, España"): exact first segment + a country.
+      const country = norm(process.env.OPENLNKD_LOCATION_COUNTRY ?? 'España');
+      const region = results.find((r) => {
+        const parts = r.label.split(',').map(norm);
+        return parts.length === 2 && parts[0] === q && [country, 'spain'].includes(parts[1]);
+      });
+      if (region) {
+        this.logger.debug(`People geo "${location}" → region ${region.label} (${region.id})`);
+        return region.id;
+      }
+    } catch { /* fall back to the static map */ }
+    return resolveGeoUrn(location);
+  }
+
   private buildSearchUrl(params: PeopleSearchParams): string {
     const base = 'https://www.linkedin.com/search/results/people/';
     const p = new URLSearchParams();
@@ -367,7 +416,7 @@ export class PeopleService {
     if (lines.length < 1) return null;
 
     // Strip inline degree indicator from name ("Ana Díaz • 2º" → "Ana Díaz")
-    const name = (lines[0] ?? '').replace(/\s*•\s*\d+[ºa-z°]*/i, '').trim();
+    const name = (lines[0] ?? '').replace(/\s*•\s*\d+[ºa-z°]*\+?/i, '').trim();
     if (!name || name === 'LinkedIn Member' || name === 'Miembro de LinkedIn') return null;
 
     const headline = lines[1] && !lines[1].startsWith('•') ? lines[1] : null;
