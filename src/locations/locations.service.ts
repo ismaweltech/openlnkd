@@ -3,6 +3,7 @@ import { BrowserService } from '../common/browser/browser.service';
 import { DatabaseService } from '../common/database/database.service';
 import { SessionService } from '../session/session.service';
 import { VoyagerService } from '../common/voyager/voyager.service';
+import { resolveGeoUrn } from '../common/location-urns';
 
 export interface LocationSuggestion {
   id: string;
@@ -20,7 +21,7 @@ export class LocationsService {
     private readonly voyager: VoyagerService,
   ) {}
 
-  async typeahead(query: string): Promise<LocationSuggestion[]> {
+  async typeahead(query: string, fresh = false): Promise<LocationSuggestion[]> {
     if (!query || query.trim().length < 2) return [];
 
     const key = query.trim().toLowerCase();
@@ -37,7 +38,7 @@ export class LocationsService {
       [`%${keyNorm}%`, `${keyNorm}%`],
     );
 
-    if (cached.length >= 3) {
+    if (cached.length >= 3 && !fresh) {
       this.logger.debug(`DB hit for "${key}" (${cached.length} results)`);
       return cached.map((r) => ({ id: r.geo_id, label: r.label }));
     }
@@ -56,6 +57,39 @@ export class LocationsService {
     // ── 3. Browser fallback (intercept LinkedIn typeahead XHR) ──────────────
     this.logger.log(`Voyager API returned 0 results for "${key}" — opening browser`);
     return this.typeaheadViaBrowser(query.trim(), key);
+  }
+
+  /**
+   * geoId for a free-text location in people and job search. People search only
+   * accepts metro/region geos: since Oct 2026 a city geo ("Sevilla, Andalucía,
+   * España") returns "no results" while the metro one ("Sevilla y alrededores")
+   * works; jobs take either, so both use the metro. Falls back to the static map.
+   */
+  async resolveSearchGeo(location: string): Promise<string | undefined> {
+    const norm = (x: string) => x.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const q = norm(location);
+    try {
+      const results = await this.typeahead(location);
+      const metro = results.find((r) => {
+        const l = norm(r.label);
+        return [`${q} y alrededores`, `greater ${q} area`, `${q} metropolitan area`, `area metropolitana de ${q}`].includes(l);
+      });
+      if (metro) {
+        this.logger.debug(`Search geo "${location}" → metro ${metro.label} (${metro.id})`);
+        return metro.id;
+      }
+      // Regions ("Andalucía" → "Andalucía, España"): exact first segment + a country.
+      const country = norm(process.env.OPENLNKD_LOCATION_COUNTRY ?? 'España');
+      const region = results.find((r) => {
+        const parts = r.label.split(',').map(norm);
+        return parts.length === 2 && parts[0] === q && [country, 'spain'].includes(parts[1]);
+      });
+      if (region) {
+        this.logger.debug(`Search geo "${location}" → region ${region.label} (${region.id})`);
+        return region.id;
+      }
+    } catch { /* fall back to the static map */ }
+    return resolveGeoUrn(location);
   }
 
   // ── Voyager API ────────────────────────────────────────────────────────────
@@ -87,51 +121,46 @@ export class LocationsService {
 
   // ── Browser fallback ───────────────────────────────────────────────────────
 
+  /**
+   * LinkedIn retired the typeahead APIs and the jobs page no longer has a location
+   * box (it's a single "describe the job" field since 2026-11). The people-search
+   * "Ubicaciones" filter still suggests places: it answers with an RSC payload
+   * (FiltersLocationTypeaheadRequest) where every option carries its geo id.
+   */
   private async typeaheadViaBrowser(query: string, key: string): Promise<LocationSuggestion[]> {
     const page = await this.browser.newPage();
-    const results: LocationSuggestion[] = [];
+    const answers: LocationSuggestion[][] = [];
+    let results: LocationSuggestion[] = [];
 
     try {
       page.on('response', async (response: any) => {
-        const url: string = response.url();
-        if (response.status() !== 200) return;
-        if (!url.includes('typeaheadFilterQuery') && !url.includes('LocationSuggest')) return;
-        try {
-          const text = await response.text().catch(() => '');
-          const body = JSON.parse(text);
-          this.parseTypeaheadResponse(body, results);
-        } catch { /* ignore */ }
+        if (response.status() !== 200 || !response.url().includes('FiltersLocationTypeahead')) return;
+        const text = await response.text().catch(() => '');
+        const parsed = this.parseLocationFilterResponse(text);
+        if (parsed.length) answers.push(parsed);
       });
 
-      await page.goto('https://www.linkedin.com/jobs/search/', {
+      await page.goto('https://www.linkedin.com/search/results/people/?keywords=a', {
         waitUntil: 'domcontentloaded',
         timeout: 20000,
       });
-      await this.delay(2000);
+      await page.getByText(/^(Ubicaciones|Locations)$/).first().click({ timeout: 15000 });
+      const input = page.locator('input[placeholder*="ubicaci" i], input[placeholder*="location" i]').first();
+      await input.waitFor({ state: 'visible', timeout: 10000 });
+      await input.click();
 
-      const locationSelectors = [
-        'input[id*="jobs-search-box-location"]',
-        'input[aria-label*="City, state"]',
-        'input[aria-label*="Ciudad"]',
-        'input[aria-label*="Ubicación"]',
-        'input[aria-label*="Location"]',
-        '.jobs-search-box input[type="text"]:last-of-type',
-      ];
-
-      let locationInput: any = null;
-      for (const sel of locationSelectors) {
-        locationInput = await page.$(sel).catch(() => null);
-        if (locationInput) break;
+      // Focusing the box returns a default list (Australia, Estados Unidos…) that can
+      // arrive after our query's answer; only accept an answer that mentions the query.
+      const q = this.normalize(query).split(/[\s,]+/)[0];
+      const matching = () => answers.filter((a) => a.some((r) => this.normalize(r.label).includes(q))).at(-1);
+      for (let attempt = 0; attempt < 2 && !matching(); attempt++) {
+        // fill() sends the whole query at once, so we don't collect answers for "B", "Bi"…
+        await input.fill('');
+        await input.fill(query);
+        for (let waited = 0; waited < 10000 && !matching(); waited += 300) await this.delay(300);
       }
-
-      if (!locationInput) {
-        this.logger.warn('Location input not found on jobs search page');
-        return [];
-      }
-
-      await locationInput.click({ clickCount: 3 });
-      await locationInput.type(query, { delay: 80 });
-      await this.delay(3000);
+      await this.delay(600); // a later answer for the full text may still be on its way
+      results = matching() ?? [];
     } catch (err: any) {
       this.logger.error(`Typeahead browser scrape failed: ${err.message}`);
     } finally {
@@ -144,6 +173,18 @@ export class LocationsService {
 
     this.logger.log(`Typeahead browser "${key}" → ${results.length} results`);
     return results;
+  }
+
+  /** Each option: FILTER_ITEM_geoUrn_<id>_CHECKED …  then its label as the first text child. */
+  private parseLocationFilterResponse(text: string): LocationSuggestion[] {
+    const out: LocationSuggestion[] = [];
+    const rx = /FILTER_ITEM_geoUrn_(\d+)_CHECKED"\}\}\},"location":"center"[\s\S]*?"children":\["((?:[^"\\]|\\.)+)"\]/g;
+    for (const m of text.matchAll(rx)) {
+      let label = m[2];
+      try { label = JSON.parse(`"${m[2]}"`); } catch { /* keep raw */ }
+      if (!out.find((r) => r.id === m[1])) out.push({ id: m[1], label });
+    }
+    return out;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

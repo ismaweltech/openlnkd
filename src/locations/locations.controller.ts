@@ -18,7 +18,8 @@ export class LocationsController implements OnModuleInit {
     description: 'Returns LinkedIn geoId + label suggestions for a given query string.',
   })
   @ApiQuery({ name: 'q', required: true, description: 'Partial location name, e.g. "sevilla"' })
-  typeahead(@Query('q') q: string) {
-    return this.locations.typeahead(q ?? '');
+  @ApiQuery({ name: 'fresh', required: false, description: 'true = skip the local cache and ask LinkedIn' })
+  typeahead(@Query('q') q: string, @Query('fresh') fresh?: string) {
+    return this.locations.typeahead(q ?? '', fresh === 'true' || fresh === '1');
   }
 }

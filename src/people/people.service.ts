@@ -102,7 +102,7 @@ export class PeopleService {
     await this.session.ensureAuthenticated();
     const limit = params.limit ?? 25;
     if (!params.geoId && params.location) {
-      const geoId = await this.resolvePeopleGeo(params.location);
+      const geoId = await this.locations.resolveSearchGeo(params.location);
       if (geoId) params = { ...params, geoId };
     }
 
@@ -244,7 +244,25 @@ export class PeopleService {
       // Paginate via aria-label="Página N" numbered buttons (no "Next" button exists).
       let currentPage = 1;
       let attempts = 0;
+      let emptyPages = 0;
+      let warnedHidden = false;
       while (people.length < limit && attempts < 8) {
+        const before = people.length;
+        // Past the free account's monthly search limit, LinkedIn keeps showing the
+        // results but hides everyone outside your network as "Miembro de LinkedIn"
+        // (no name, no profile link). Say so instead of silently returning fewer.
+        const hidden = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('[role="listitem"], main ul > li'))
+            .filter((li) => /^\s*(miembro de linkedin|linkedin member)\b/i.test((li as HTMLElement).innerText ?? '')).length,
+        ).catch(() => 0);
+        if (hidden && !warnedHidden) {
+          warnedHidden = true;
+          this.logger.warn(
+            `LinkedIn hides ${hidden} results on this page as "Miembro de LinkedIn": the account hit the monthly ` +
+            'search limit for free accounts. Only people in your network show until it resets (start of next month).',
+          );
+        }
+
         const seenUrls = new Set(people.map(p => p.profile_url));
         const links = await page.$$('a[href*="/in/"]');
         const cards: any[] = [];
@@ -271,6 +289,9 @@ export class PeopleService {
         }
 
         if (people.length >= limit) break;
+        // Two pages in a row with nobody new: the rest is hidden or empty, stop paging
+        emptyPages = people.length === before ? emptyPages + 1 : 0;
+        if (emptyPages >= 2) break;
 
         currentPage++;
         const nextBtn = await page.$(
@@ -317,39 +338,6 @@ export class PeopleService {
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
-
-  /**
-   * People search only accepts metro/region geos: since Oct 2026 a city geo
-   * ("Sevilla, Andalucía, España") returns "no results" while the metro one
-   * ("Sevilla y alrededores") works. Job search still takes the city, so this is
-   * people-specific. Countries and regions resolve through the static map.
-   */
-  private async resolvePeopleGeo(location: string): Promise<string | undefined> {
-    const norm = (x: string) => x.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-    const q = norm(location);
-    try {
-      const results = await this.locations.typeahead(location);
-      const metro = results.find((r) => {
-        const l = norm(r.label);
-        return [`${q} y alrededores`, `greater ${q} area`, `${q} metropolitan area`, `area metropolitana de ${q}`].includes(l);
-      });
-      if (metro) {
-        this.logger.debug(`People geo "${location}" → metro ${metro.label} (${metro.id})`);
-        return metro.id;
-      }
-      // Regions ("Andalucía" → "Andalucía, España"): exact first segment + a country.
-      const country = norm(process.env.OPENLNKD_LOCATION_COUNTRY ?? 'España');
-      const region = results.find((r) => {
-        const parts = r.label.split(',').map(norm);
-        return parts.length === 2 && parts[0] === q && [country, 'spain'].includes(parts[1]);
-      });
-      if (region) {
-        this.logger.debug(`People geo "${location}" → region ${region.label} (${region.id})`);
-        return region.id;
-      }
-    } catch { /* fall back to the static map */ }
-    return resolveGeoUrn(location);
-  }
 
   private buildSearchUrl(params: PeopleSearchParams): string {
     const base = 'https://www.linkedin.com/search/results/people/';

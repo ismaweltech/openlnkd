@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNotEmpty, MaxLength, Matches } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, IsNotEmpty, MaxLength, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 const LINKEDIN_PROFILE = /linkedin\.com\/in\//i;
@@ -15,6 +15,11 @@ export class SendInviteDto {
   @IsString()
   @MaxLength(300)
   message?: string;
+
+  @ApiPropertyOptional({ description: 'Go all the way to the invite dialog but do not press Send (for testing)' })
+  @IsOptional()
+  @IsBoolean()
+  dryRun?: boolean;
 }
 
 export class SendMessageDto {

@@ -158,7 +158,7 @@ LinkedIn changes its markup every few weeks, and a parser can break silently (em
 npm run smoke
 ```
 
-It calls the read-only endpoints and validates the **content** of each answer, not just the status code, then prints `OK`/`FAIL` per area with the reason. It never sends messages, invites or campaigns (it only creates and deletes a throwaway template and webhook in your local DB). Exit code 1 if anything fails. Options: `OPENLNKD_URL`, `SMOKE_LOCATION` (default `Madrid`).
+It calls the read-only endpoints and validates the **content** of each answer, not just the status code, then prints `OK`/`FAIL` per area with the reason. It never sends messages, invites or campaigns: the invite check is a dry run that stops before Send, and it only creates and deletes a throwaway template and webhook in your local DB. Exit code 1 if anything fails. Options: `OPENLNKD_URL`, `SMOKE_LOCATION` (default `Madrid`).
 
 If something fails, update first (`git pull`) — the fix may already be out — and otherwise open an issue with the output.
 
@@ -257,10 +257,13 @@ GET /jobs?easyApply=true&keyword=AI&notApplied=true
 
 ```bash
 GET /locations/typeahead?q=Barcelona
-# → [{ "label": "Barcelona, Spain", "geoId": "88" }]
+# → [{ "id": "107025191", "label": "Barcelona, Cataluña, España" },
+#    { "id": "90009761",  "label": "Barcelona y alrededores" }, …]
 ```
 
-Results are cached in the database — repeated queries resolve instantly without hitting LinkedIn.
+Results are cached in the database — repeated queries resolve instantly without hitting LinkedIn. Add `&fresh=true` to skip the cache and ask LinkedIn again.
+
+People, job and company search resolve a free-text `location` through this lookup, preferring the metro area ("Madrid y alrededores"): people search ignores city geos, jobs take either.
 
 ---
 
@@ -268,7 +271,7 @@ Results are cached in the database — repeated queries resolve instantly withou
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/connections/invite` | Send a connection request with optional note |
+| `POST` | `/connections/invite` | Send a connection request with optional note (`dryRun: true` to test without sending) |
 | `POST` | `/connections/message` | Send a DM to an existing connection |
 | `GET` | `/connections` | List all tracked connections |
 
@@ -280,6 +283,11 @@ curl -X POST http://localhost:3000/connections/invite \
     "profileUrl": "https://www.linkedin.com/in/someone/",
     "message": "Hi! I came across your profile and would love to connect."
   }'
+
+# Dry run: opens the invite dialog, checks it is for this person, does NOT press Send
+curl -X POST http://localhost:3000/connections/invite \
+  -H "Content-Type: application/json" \
+  -d '{ "profileUrl": "https://www.linkedin.com/in/someone/", "dryRun": true }'
 
 # Direct message
 curl -X POST http://localhost:3000/connections/message \
@@ -549,6 +557,8 @@ curl -X POST http://localhost:3000/outreach/campaigns/1/run
 | `GET` | `/outreach/jobs/:jobId/recruiter` | Find the hiring manager of a job listing |
 | `POST` | `/outreach/jobs/:jobId/message-recruiter` | Message the recruiter using a template |
 
+Only the person under the job's "Conoce al equipo de contratación / Meet the hiring team" block counts. Most jobs don't name one; then the answer is empty and `message-recruiter` returns `Recruiter not found` (it never falls back to "People you can reach out to", who are just alumni or contacts at the company).
+
 ```bash
 # Find the recruiter for job ID 4410377468
 GET /outreach/jobs/4410377468/recruiter
@@ -747,6 +757,7 @@ SQLite by default at `./data/openlnkd.db`. Switch to PostgreSQL by setting `DATA
 | **Voyager API deprecations** | LinkedIn removes internal API endpoints without notice — the legacy messaging and profile endpoints already return `HTTP 410 Gone`. OpenLnkd falls back to browser automation automatically, so write operations (messaging) are browser-driven and therefore slower than a pure API call. |
 | **Hashed CSS classes** | LinkedIn now ships hashed, non-semantic class names (`_82eace64`…) for most UI. OpenLnkd relies on stable selectors instead — HTML attributes (`contenteditable`, `type="submit"`), `aria-label` text and role attributes — but a major UI overhaul can still require selector updates. |
 | **RSC parsing fragility** | LinkedIn's React Server Component responses can change with UI updates. Description scraping has four fallback layers to handle this. |
+| **Free-account search limit** | After a number of people searches per month LinkedIn shows "busca perfiles sin límites / Premium" and hides everyone outside your network as "Miembro de LinkedIn". Searches still work but return only 1st/2nd-degree people; OpenLnkd logs a warning when this happens. It resets at the start of the next month. |
 | **Single account** | Designed to run with one LinkedIn account. Multi-account support is not planned. |
 | **No proxy support** | All requests originate from the same IP. For large-scale use, consider running separate instances behind different IPs. |
 

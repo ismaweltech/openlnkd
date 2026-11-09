@@ -11,6 +11,7 @@ export interface Connection {
 export interface SendConnectionParams {
   profileUrl: string;
   message?: string; // max 300 chars, opcional
+  dryRun?: boolean; // stop before pressing Send
 }
 
 export interface SendMessageParams {

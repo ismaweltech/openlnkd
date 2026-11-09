@@ -6,8 +6,9 @@
 // status code), so a silent break — reactions coming back null, a button label
 // leaking into a name — shows up as a FAIL with the reason.
 //
-// It never sends anything: no messages, invites or campaigns. It only creates
-// and deletes a throwaway template and webhook in your local DB.
+// It never sends anything: no messages, invites or campaigns (the invite check is a
+// dry run that stops before Send). It only creates and deletes a throwaway
+// template and webhook in your local DB.
 //
 //   npm run smoke                       # against http://127.0.0.1:3000
 //   OPENLNKD_URL=http://127.0.0.1:3005 npm run smoke
@@ -83,9 +84,11 @@ await check('session', async () => {
 });
 
 await check('locations/typeahead', async () => {
-  const xs = list(await call('GET', `/locations/typeahead?q=${encodeURIComponent(LOCATION)}`), 'typeahead');
+  // fresh=true skips the local cache: a cached city kept passing while LinkedIn's
+  // lookup was broken for every city not seen before.
+  const xs = list(await call('GET', `/locations/typeahead?q=${encodeURIComponent(LOCATION)}&fresh=true`), 'typeahead');
   must(xs.length > 0, 'no suggestions');
-  must(xs.every((x) => x.id && x.label), 'suggestion without id/label');
+  must(xs.every((x) => /^\d+$/.test(x.id) && x.label), 'suggestion without id/label');
   must(xs.some((x) => x.label.toLowerCase().includes(LOCATION.toLowerCase())), `no label contains "${LOCATION}"`);
   return `${xs.length} suggestions`;
 });
@@ -94,6 +97,10 @@ await check('jobs/search', async () => {
   const xs = list(await call('POST', '/jobs/search', { keywords: 'software engineer', location: LOCATION, limit: 3 }), 'jobs');
   must(xs.length > 0, 'no jobs found');
   for (const j of xs) must(j.id && j.title && j.company, `job missing id/title/company: ${JSON.stringify(j).slice(0, 100)}`);
+  // A wrong geoId doesn't fail, it silently searches somewhere else (Madrid → London)
+  const where = (j) => (j.location ?? '').toLowerCase();
+  must(xs.some((j) => where(j).includes(LOCATION.toLowerCase()) || /españa|spain|remoto|remote/.test(where(j))),
+    `jobs are not in ${LOCATION}: ${xs.map((j) => j.location).join(' / ')}`);
   jobId = xs[0].id;
   return `${xs.length} jobs, e.g. "${xs[0].title}" @ ${xs[0].company}`;
 });
@@ -104,6 +111,16 @@ await check('jobs/:id/description', async () => {
   must(r.status === 200, `HTTP ${r.status}`);
   must((r.json?.description ?? '').length > 100, 'description empty or too short');
   return `${r.json.description.length} chars`;
+});
+
+await check('outreach/jobs/:id/recruiter', async () => {
+  must(jobId, 'skipped: no job from the previous check');
+  const r = await call('GET', `/outreach/jobs/${jobId}/recruiter`);
+  must(r.status === 200, `HTTP ${r.status}`);
+  // Most jobs don't name a recruiter; when one comes back it must look like a person
+  if (!r.json || typeof r.json !== 'object') return 'no recruiter on this job (normal)';
+  must(cleanName(r.json.name) && /linkedin\.com\/in\//.test(r.json.profile_url), `bad recruiter: ${JSON.stringify(r.json).slice(0, 120)}`);
+  return r.json.name;
 });
 
 await check('companies/search', async () => {
@@ -173,6 +190,16 @@ await check('people/:slug/comments', async () => {
     must(typeof c.onOwnPost === 'boolean', 'onOwnPost missing');
   }
   return xs.length ? `${xs.length} comments` : '0 comments (this person may not comment)';
+});
+
+await check('connections/invite (dry run)', async () => {
+  // Goes as far as the invite dialog and checks it is for this person; never presses Send.
+  if (!otherSlug) return 'skipped: no profile from people/search';
+  const r = await call('POST', '/connections/invite', { profileUrl: `https://www.linkedin.com/in/${otherSlug}/`, dryRun: true });
+  must(r.status < 300, `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 120)}`);
+  const msg = r.json?.message ?? '';
+  must(r.json?.ok === true || /already|pending|follow-only/i.test(msg), msg || 'no answer');
+  return msg;
 });
 
 await check('outreach/inbox', async () => {

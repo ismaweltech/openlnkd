@@ -44,6 +44,14 @@ export class SessionService {
       await page.goto(`${LINKEDIN_HOME}/login`, { waitUntil: 'domcontentloaded' });
       await this.humanDelay(1200, 1800);
 
+      // The "remember me" cookie can sign us straight back in: /login lands on the feed.
+      if (page.url().includes('/feed')) {
+        await this.saveSession();
+        this.authenticated = true;
+        this.logger.log('Signed back in from the remembered session');
+        return { ok: true, message: 'Session restored' };
+      }
+
       // LinkedIn renders two forms (one hidden) — target only the visible one
       const emailInput = page.locator('input[type="email"]:visible').last();
       await emailInput.waitFor({ state: 'visible', timeout: 15000 });
@@ -165,6 +173,8 @@ export class SessionService {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
             'X-Requested-With': 'XMLHttpRequest',
           },
+          // An expired li_at makes LinkedIn redirect in a loop; treat it as "not valid" and use the browser
+          redirect: 'manual',
         },
       );
 
@@ -193,6 +203,13 @@ export class SessionService {
       // When session cookies exist but LinkedIn shows the account chooser at
       // /uas/login?session_redirect=..., we click the first account card to
       // complete sign-in. Uses page.evaluate for maximum DOM flexibility.
+      // With an expired li_at but a valid "remember me" cookie, LinkedIn shows an
+      // interstitial ("Iniciando sesión… Si sigues en esta página, se iniciará la
+      // sesión") that signs back in by itself after a few seconds.
+      if (!page.url().includes('/feed')) {
+        await page.waitForURL(/linkedin\.com\/feed/, { timeout: 15000 }).catch(() => {});
+      }
+
       if (!page.url().includes('/feed')) {
         this.logger.debug(`Redirected to ${page.url()} — checking for account picker`);
         try {

@@ -5,6 +5,7 @@ import { SessionService } from '../session/session.service';
 import { VoyagerService } from '../common/voyager/voyager.service';
 import { Job, JobSearchParams } from './jobs.types';
 import { resolveGeoUrn } from '../common/location-urns';
+import { LocationsService } from '../locations/locations.service';
 
 const DATE_POSTED_FILTER: Record<string, string> = {
   past24h: 'r86400',
@@ -21,11 +22,17 @@ export class JobsService {
     private readonly db: DatabaseService,
     private readonly session: SessionService,
     private readonly voyager: VoyagerService,
+    private readonly locations: LocationsService,
   ) {}
 
   async search(params: JobSearchParams): Promise<Job[]> {
     await this.session.ensureAuthenticated();
     const limit = params.limit ?? 25;
+
+    if (params.location && !params.geoId) {
+      const geoId = await this.locations.resolveSearchGeo(params.location);
+      if (geoId) params = { ...params, geoId };
+    }
 
     // ── Primary: Voyager jobs/search API (no browser) ─────────────────────
     const apiJobs = await this.searchViaApi(params, limit);

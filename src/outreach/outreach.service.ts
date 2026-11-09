@@ -278,17 +278,23 @@ export class OutreachService {
         await this.delay(600, 900);
       }
       // LinkedIn hashes all class names, so the old `.hirer-card` selector no longer
-      // matches. The job poster is the profile link (`a[href*="/in/"]`) inside the
-      // "Anunciante del empleo / Meet the hiring team" section. Prefer a link whose
-      // surrounding text names that section; otherwise fall back to the only /in/ link.
+      // matches. The job poster is the first profile link right after the "Conoce al
+      // equipo de contratación / Meet the hiring team" heading. Since 2026-11 the page
+      // also has "Personas con las que puedes hablar" (alumni and contacts at the
+      // company) ABOVE it, so "any /in/ link" picked someone unrelated. No heading →
+      // no recruiter: better "not found" than messaging the wrong person.
       const recruiter = await page.evaluate(() => {
-        const HIRE_CTX = /anunciante del empleo|equipo de contrataci|hiring team|conoce a|qui[eé]n contrata|job poster/i;
-        const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]'));
-        if (!links.length) return null;
-
-        const pick =
-          links.find((a) => HIRE_CTX.test((a.closest('section,div,li')?.textContent ?? ''))) ??
-          links[0];
+        const HEADING = /^(conoce al equipo de contrataci[oó]n|meet the hiring team|anunciante del empleo|job poster)$/i;
+        const heading = Array.from(document.querySelectorAll<HTMLElement>('h2, h3, span, p, div'))
+          .find((el) => el.children.length <= 1 && HEADING.test((el.textContent ?? '').trim()));
+        if (!heading) return null;
+        const about = Array.from(document.querySelectorAll('h2'))
+          .find((h) => /^(acerca del empleo|about the job)$/i.test((h.textContent ?? '').trim()));
+        const pick = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]')).find((a) =>
+          (heading.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+          (!about || (a.compareDocumentPosition(about) & Node.DOCUMENT_POSITION_FOLLOWING)) &&
+          (a.textContent ?? '').trim().length > 1);
+        if (!pick) return null;
 
         const href = (pick.getAttribute('href') ?? '').split('?')[0];
         const slug = href.match(/\/in\/([^/?#]+)/)?.[1];
