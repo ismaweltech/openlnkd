@@ -593,7 +593,8 @@ export class PeopleService {
             !/^(ver estad[ií]sticas|ver an[aá]lisis|view analytics|estad[ií]sticas)/i.test(l) &&
             !/\b(ha|han)\s+reaccionado$|personas?\s+más$|^•$/i.test(l) &&
             !/^[\d.]+\s*(vez|veces)\s+compartid[oa]$/i.test(l) &&
-            !/^(recomendar|comentar|compartir|enviar|like|comment|share|send|me gusta)$/i.test(l),
+            // "Promocionar" shows under your own posts since 2026-11
+            !/^(recomendar|comentar|compartir|enviar|like|comment|share|send|me gusta|promocionar|promote|boost)$/i.test(l),
           );
           // The action-button counts render as bare numbers right after the body.
           while (bodyLines.length && /^[\d.,]+(\s*mil|k)?$/i.test(bodyLines[bodyLines.length - 1])) bodyLines.pop();

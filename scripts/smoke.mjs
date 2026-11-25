@@ -158,7 +158,7 @@ const checkPosts = (posts, who) => {
     must(['post', 'repost'].includes(p.type), `bad type ${p.type}`);
     must(p.days !== null && p.days !== undefined, `date not parsed (age=${JSON.stringify(p.age)})`);
     must(p.body && !/^(conectar|connect|seguir|follow)\b/i.test(p.body), `button text leaked into body: "${(p.body ?? '').slice(0, 30)}"`);
-    must(!/\n[\d.,]+$/.test(p.body), 'engagement counts leaked into the end of the body');
+    must(!/\n([\d.,]+|promocionar|promote|boost)$/i.test(p.body), 'engagement counts or buttons leaked into the end of the body');
     must(['text', 'image', 'images', 'video', 'document'].includes(p.media), `bad media ${p.media}`);
   }
   must(posts.some((p) => p.reactions !== null), `${who}: reactions are null on every post`);
